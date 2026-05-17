@@ -87,7 +87,7 @@ $serial = try { (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).Serial
 
     <StackPanel Grid.Row="0" Margin="0,0,0,20">
       <TextBlock Text="VM-Pilot" FontSize="22" FontWeight="SemiBold"/>
-      <TextBlock Text="AutoPilot Enrollment" Foreground="#909090" FontSize="13" Margin="0,2,0,0"/>
+      <TextBlock Text="AutoPilot Import" Foreground="#909090" FontSize="13" Margin="0,2,0,0"/>
       <TextBlock x:Name="SerialText" Foreground="#909090" FontSize="12" Margin="0,4,0,0"/>
     </StackPanel>
 
