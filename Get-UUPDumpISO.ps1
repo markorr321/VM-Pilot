@@ -172,7 +172,11 @@ if (Test-Path $packDir) {
     # wim export" in prior runs — leftover install.wim from a previous build
     # was still locked, the wipe didn't actually clear it, and the new
     # conversion choked on the stale file).
-    $orphans = Get-Process aria2c, wimlib-imagex, dism, '7zr' -ErrorAction SilentlyContinue
+    #
+    # wimserv.exe is the Windows Imaging Service — it spawns during WIM
+    # operations and is the most common hidden lock-holder for install.wim
+    # after a build ends. Killing it lets us wipe install.wim cleanly.
+    $orphans = Get-Process aria2c, wimlib-imagex, dism, '7zr', wimserv -ErrorAction SilentlyContinue
     if ($orphans) {
         Write-Host "[UUP] Killing $($orphans.Count) leftover process(es) from a prior run..."
         $orphans | Stop-Process -Force -ErrorAction SilentlyContinue
