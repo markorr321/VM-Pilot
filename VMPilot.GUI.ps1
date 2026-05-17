@@ -95,39 +95,24 @@ $secondaryXaml
 }
 
 function Test-HyperVState {
-    # Fast path: cmdlet present → feature is live
+    # Fast path #1: cmdlet present → feature is live
     if (Get-Command Get-VM -ErrorAction SilentlyContinue) { return 'Ready' }
 
-    # Check the OS edition — Pro / Enterprise / Education / Workstations all
-    # support Hyper-V; Home does not. We trust this over DISM feature lookup,
-    # which sometimes returns empty results even for present features.
-    $skuSupportsHyperV = $false
+    # Fast path #2: SKU check via WMI is sub-second. Pro / Enterprise /
+    # Education / Workstations / Server all support Hyper-V; Home does not.
+    # We prefer this over Get-WindowsOptionalFeature (which calls DISM and
+    # routinely takes 15-45 seconds per feature lookup) and treat any
+    # supported SKU as 'Disabled' if the cmdlet check above came back empty.
+    # The enable step will surface any real DISM error if our assumption is
+    # wrong — that's a 1-second cost vs. 45 seconds of unconditional probing.
     try {
         $caption = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).Caption
         if ($caption -notmatch 'Home' -and
             $caption -match 'Pro|Enterprise|Education|Workstation|Server') {
-            $skuSupportsHyperV = $true
+            return 'Disabled'
         }
     } catch { }
 
-    # Slow path: DISM query for the feature's actual state
-    try {
-        foreach ($name in @('Microsoft-Hyper-V-All','Microsoft-Hyper-V','Microsoft-Hyper-V-Hypervisor')) {
-            $f = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
-            if ($f) {
-                switch ($f.State) {
-                    'EnablePending' { return 'EnablePending' }
-                    'Enabled'       { return 'Ready' }
-                    default         { return 'Disabled' }
-                }
-            }
-        }
-    } catch { }
-
-    # DISM didn't find any of the names we tried. If the SKU supports
-    # Hyper-V we still want to offer the enable flow — better to attempt
-    # it and surface a real DISM error than to refuse outright.
-    if ($skuSupportsHyperV) { return 'Disabled' }
     return 'NotAvailable'
 }
 

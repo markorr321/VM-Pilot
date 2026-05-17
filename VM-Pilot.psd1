@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.3'
+    ModuleVersion     = '0.1.4'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,6 +42,14 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.1.4
+- Hyper-V startup check is now sub-second on Pro/Enterprise/Education boxes.
+  Previously we ran up to three Get-WindowsOptionalFeature lookups against
+  DISM (15-45s) before showing the enable dialog. We now trust the OS SKU:
+  any non-Home Pro/Enterprise/Education/Workstation/Server edition is
+  treated as Disabled (offers to enable) without probing DISM. The actual
+  Enable-WindowsOptionalFeature call surfaces any real failure.
+
 0.1.3
 - Fix false "Hyper-V Not Available" on Windows 11 Enterprise / Pro / Education
   / Workstation when Get-WindowsOptionalFeature returns empty for the feature
