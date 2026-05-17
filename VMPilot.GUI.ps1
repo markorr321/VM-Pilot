@@ -971,15 +971,28 @@ function Start-Workflow {
                         Restore-Button
                         return
                     }
-                    Set-Status 'Starting UUP Dump download (30-60 min)…'
+                    Set-Status 'Starting UUP Dump download (~15-20 min)…'
                     try {
-                        $uupOutput = & $uupHelper -Release $Release 2>&1 | ForEach-Object {
+                        # *>&1 merges every stream (including Information /
+                        # Write-Host) into the pipeline. With plain 2>&1, the
+                        # helper's [UUP] status lines (which use Write-Host)
+                        # never reach this parser and the GUI appears frozen
+                        # for the entire 15-20 min build.
+                        $uupOutput = & $uupHelper -Release $Release *>&1 | ForEach-Object {
                             $line = "$_"
                             if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…' }
                             elseif ($line -match '^\[UUP\] Selected build: (.+)$')             { Set-Status "Selected build: $($Matches[1])" }
                             elseif ($line -match '^\[UUP\] Downloading conversion script pack'){ Set-Status 'Downloading UUP Dump conversion pack…' }
+                            elseif ($line -match '^\[UUP\] Patching')                          { Set-Status 'Patching conversion config…' }
                             elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 15-20 min)…' }
                             elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…' }
+                            elseif ($line -match '^Downloading aria2c')                        { Set-Status 'Downloading aria2c…' }
+                            elseif ($line -match '^Verifying aria2c')                          { Set-Status 'Verifying aria2c…' }
+                            elseif ($line -match '^Downloading the UUP converter')             { Set-Status 'Downloading UUP converter…' }
+                            elseif ($line -match '^=== Creating install.wim')                  { Set-Status 'Building install.wim (LZX compress, slowest single step)…' }
+                            elseif ($line -match '^=== Creating Setup Media Layout')           { Set-Status 'Creating setup media layout…' }
+                            elseif ($line -match '^=== Updating install.wim')                  { Set-Status 'Integrating updates into install.wim…' }
+                            elseif ($line -match '^Building ISO')                              { Set-Status 'Building ISO image…' }
                             $line
                         }
                         $isoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
