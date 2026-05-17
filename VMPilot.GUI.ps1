@@ -30,7 +30,7 @@ try {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 
 # --- Constants ------------------------------------------------------------
-$script:BootSource         = 'C:\VMs\Win11-25H2.vhdx'
+$script:BootSource         = 'C:\VMs\Win11-24H2.vhdx'
 $script:BuilderScript      = 'C:\Tools\WinVHDX\Get-Win11VHDX.ps1'
 $script:VMPath             = 'C:\VMs'
 $script:FilesToCopy        = @('C:\Autopilot HWID Collection\AutoPilotHWID-Collection.bat')
@@ -45,13 +45,14 @@ $script:CommunityScriptInVM  = 'Get-WindowsAutopilotInfoCommunity.ps1'   # lands
 $script:EnrollGuiInVM        = 'AutopilotEnroll.GUI.ps1'                 # lands at C:\<this>
 $script:EnrollBatInVM        = 'import.bat'                              # lands at C:\import.bat — what the user runs at Shift+F10
 $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offline: lands at C:\<this>, called by SetupComplete.cmd
+$script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevices.ReactView/filterOnManualRemediationRequired~/false'
 
 # --- XAML -----------------------------------------------------------------
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VM-Pilot"
-        Width="600" Height="780"
+        Width="600" Height="900"
         WindowStartupLocation="CenterScreen"
         Background="#161616"
         Foreground="#FFFFFF"
@@ -190,19 +191,40 @@ $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offli
       <TextBlock Text="Spin up a fresh Hyper-V VM and collect the AutoPilot hardware hash." Foreground="#909090" FontSize="13" Margin="0,6,0,0"/>
     </StackPanel>
 
-    <!-- Mode -->
-    <StackPanel Grid.Row="1" Margin="0,0,0,18">
-      <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="6"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline (save CSV only)" IsChecked="True" Style="{StaticResource Segment}"/>
-        <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online (Upload AP)" Style="{StaticResource Segment}"/>
-      </Grid>
-    </StackPanel>
+    <!-- Mode (left) + Win Release (right) -->
+    <Grid Grid.Row="1" Margin="0,0,0,18">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="20"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <StackPanel Grid.Column="0">
+        <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline" IsChecked="True" Style="{StaticResource Segment}"/>
+          <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online"  Style="{StaticResource Segment}"/>
+        </Grid>
+      </StackPanel>
+
+      <StackPanel Grid.Column="2">
+        <TextBlock Text="WIN RELEASE" Style="{StaticResource FieldLabel}"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <RadioButton Grid.Column="0" x:Name="Rel24H2" GroupName="Release" Content="24H2" IsChecked="True" Style="{StaticResource Segment}"/>
+          <RadioButton Grid.Column="2" x:Name="Rel25H2" GroupName="Release" Content="25H2" Style="{StaticResource Segment}"/>
+        </Grid>
+      </StackPanel>
+    </Grid>
 
     <!-- VM name -->
     <StackPanel Grid.Row="2" Margin="0,0,0,18">
@@ -264,11 +286,12 @@ $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offli
     <!-- Divider -->
     <Border Grid.Row="6" Height="1" Background="#2A2A2A" Margin="0,0,0,22"/>
 
-    <!-- Status + progress (top) + completion/result (centered fill below) -->
+    <!-- Status + progress (top) + completion/serial (centered) + Cleanup link (bottom) -->
     <Grid Grid.Row="7">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
 
       <StackPanel Grid.Row="0">
@@ -287,21 +310,103 @@ $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offli
                      Visibility="Collapsed"/>
       </StackPanel>
 
-      <!-- Success: large centered "Complete" wordmark. -->
-      <TextBlock Grid.Row="1" x:Name="CompletedIcon" Text="Complete"
-                 FontSize="40" FontWeight="SemiBold" Foreground="#1ACB5F"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                 TextAlignment="Center" Visibility="Collapsed"/>
+      <!-- Center stack: Complete (or red error) + the serial number block -->
+      <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+        <TextBlock x:Name="CompletedIcon" Text="Complete"
+                   FontSize="36" FontWeight="SemiBold" Foreground="#1ACB5F"
+                   HorizontalAlignment="Center" TextAlignment="Center"
+                   Padding="0,4,0,8"
+                   Visibility="Collapsed"/>
 
-      <!-- Error: red text, centered when shown. -->
-      <TextBlock Grid.Row="1" x:Name="ResultText"
-                 Text=""
-                 FontSize="13"
-                 Foreground="#F03A47"
-                 TextWrapping="Wrap"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                 TextAlignment="Center"
-                 Visibility="Collapsed"/>
+        <TextBlock x:Name="ResultText" Text=""
+                   FontSize="13" Foreground="#F03A47" TextWrapping="Wrap"
+                   HorizontalAlignment="Center" TextAlignment="Center"
+                   Visibility="Collapsed"/>
+
+        <!-- DEVICE SERIAL block: shown alongside Complete, auto-copied to clipboard -->
+        <StackPanel x:Name="SerialPanel" Visibility="Collapsed" Margin="0,20,0,0">
+          <TextBlock Text="DEVICE SERIAL" Style="{StaticResource FieldLabel}" HorizontalAlignment="Center"/>
+          <TextBlock x:Name="SerialText" FontSize="14"
+                     FontFamily="Cascadia Mono, Consolas, Courier New"
+                     Foreground="#FFFFFF" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+          <TextBlock Text="copied to clipboard" FontSize="11"
+                     Foreground="#707070" HorizontalAlignment="Center"
+                     Margin="0,6,0,0" FontStyle="Italic"/>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- Bottom row: Open AutoPilot (left, blue) | Cleanup VMs (red) + Exit (gray) on right. -->
+      <Grid Grid.Row="2" Margin="0,12,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <Button Grid.Column="0" x:Name="IntuneButton" Content="OPEN AUTOPILOT"
+                Width="160" Height="36"
+                Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
+                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#1F8AE0"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#0061B0"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+        </Button>
+
+        <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs"
+                Width="140" Height="36"
+                Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0"
+                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#FF5560"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#C92B37"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+        </Button>
+
+        <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT"
+                Width="90" Height="36" Margin="8,0,0,0"
+                Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
+                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#3A3A3A"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#1F1F1F"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+        </Button>
+      </Grid>
     </Grid>
   </Grid>
 </Window>
@@ -318,8 +423,15 @@ $ResultText     = $window.FindName('ResultText')
 $CompletedIcon  = $window.FindName('CompletedIcon')
 $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
+$Rel24H2        = $window.FindName('Rel24H2')
+$Rel25H2        = $window.FindName('Rel25H2')
 $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
+$SerialPanel    = $window.FindName('SerialPanel')
+$SerialText     = $window.FindName('SerialText')
+$CleanupButton    = $window.FindName('CleanupButton')
+$IntuneButton     = $window.FindName('IntuneButton')
+$ExitButton       = $window.FindName('ExitButton')
 
 # --- Dark title bar (DWM immersive dark mode) -----------------------------
 $window.Add_SourceInitialized({
@@ -370,7 +482,20 @@ function Set-Done {
     })
 }
 function Hide-CompletedIcon {
-    $window.Dispatcher.Invoke([Action]{ $CompletedIcon.Visibility = 'Collapsed' })
+    $window.Dispatcher.Invoke([Action]{
+        $CompletedIcon.Visibility = 'Collapsed'
+        $SerialPanel.Visibility   = 'Collapsed'
+        $SerialText.Text          = ''
+    })
+}
+function Show-Serial {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return }
+    $window.Dispatcher.Invoke([Action]{
+        $SerialText.Text         = $Value
+        $SerialPanel.Visibility  = 'Visible'
+        try { [System.Windows.Clipboard]::SetText($Value) } catch { }
+    })
 }
 
 function Get-CheckedRadio {
@@ -392,6 +517,8 @@ function Start-Workflow {
     $ramGB    = Get-CheckedRadio -Values 4,8,16  -Prefix 'Ram' -Default 4
     $online   = [bool]$ModeOnline.IsChecked
     $groupTag = $GroupTagBox.Text.Trim()
+    $release  = if ($Rel25H2.IsChecked) { '25H2' } else { '24H2' }
+    $bootSource    = "C:\VMs\Win11-$release.vhdx"
 
     if ([string]::IsNullOrWhiteSpace($vmName)) {
         Set-Result -Text 'VM name cannot be empty.' -Color '#F03A47'
@@ -414,13 +541,14 @@ function Start-Workflow {
     # Device never leaves OOBE state.
 
     $sharedVars = @{
-        VMName          = $vmName
-        CpuCount        = $cpu
-        RamGB           = $ramGB
-        Online          = $online
-        GroupTag        = $groupTag
-        ScriptDir       = $PSScriptRoot
-        BootSource      = $script:BootSource
+        VMName              = $vmName
+        CpuCount            = $cpu
+        RamGB               = $ramGB
+        Online              = $online
+        GroupTag            = $groupTag
+        Release             = $release
+        ScriptDir           = $PSScriptRoot
+        BootSource      = $bootSource            # per-release override
         BuilderScript   = $script:BuilderScript
         VMPath          = $script:VMPath
         FilesToCopy     = $script:FilesToCopy
@@ -437,6 +565,8 @@ function Start-Workflow {
         StatusText      = $StatusText
         ResultText      = $ResultText
         CompletedIcon   = $CompletedIcon
+        SerialPanel     = $SerialPanel
+        SerialText      = $SerialText
         RunButton       = $RunButton
         ActivityBar     = $ActivityBar
         ModeOnline      = $ModeOnline
@@ -475,6 +605,15 @@ function Start-Workflow {
                 $CompletedIcon.Visibility = 'Visible'
             })
         }
+        function Show-Serial {
+            param([string]$Value)
+            if ([string]::IsNullOrWhiteSpace($Value)) { return }
+            $Window.Dispatcher.Invoke([Action]{
+                $SerialText.Text         = $Value
+                $SerialPanel.Visibility  = 'Visible'
+                try { [System.Windows.Clipboard]::SetText($Value) } catch { }
+            })
+        }
         function Restore-Button {
             $Window.Dispatcher.Invoke([Action]{
                 $RunButton.IsEnabled = $true
@@ -494,9 +633,26 @@ function Start-Workflow {
                     Restore-Button
                     return
                 }
+
+                # Always pull a fresh Fido before building. Microsoft periodically
+                # tweaks their ISO download endpoints which breaks the on-disk Fido;
+                # grabbing the latest from upstream means the build works first try
+                # without a retry loop.
+                Set-Status 'Refreshing Fido from GitHub…'
+                $fidoPath = Join-Path (Split-Path $BuilderScript -Parent) 'Fido.ps1'
+                try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' `
+                                      -OutFile $fidoPath -UseBasicParsing -ErrorAction Stop
+                } catch {
+                    Set-Result -Text "Failed to refresh Fido from GitHub: $($_.Exception.Message)" -Color '#F03A47'
+                    Restore-Button
+                    return
+                }
+
                 Set-Status 'Building Windows VHDX template (one-time, may take 5–30 min)…'
                 try {
-                    & $BuilderScript -Release 25H2 -Edition Pro -OutVhdx $BootSource 2>&1 | ForEach-Object {
+                    & $BuilderScript -Release $Release -Edition Pro -OutVhdx $BootSource 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
                         elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }
@@ -655,6 +811,16 @@ shutdown /s /f /t 5
             # ===== Online mode: VM is at OOBE — user runs the community script via Shift+F10 =====
             # Community script handles upload + assignment + reboot-from-OOBE → AutoPilot enrolls.
             if ($Online) {
+                # Query the VM's BIOS serial from Hyper-V settings so we can show it
+                # in the GUI + clipboard (matches what Win32_BIOS will return inside the VM)
+                try {
+                    $ms = Get-CimInstance -Namespace 'root\virtualization\v2' `
+                                          -ClassName 'Msvm_VirtualSystemSettingData' `
+                                          -Filter "ElementName='$VMName' AND VirtualSystemType='Microsoft:Hyper-V:System:Realized'" `
+                                          -ErrorAction SilentlyContinue
+                    $bios = "$($ms.BIOSSerialNumber)"
+                    if ($bios) { Show-Serial -Value $bios }
+                } catch { }
                 Set-Done
                 Restore-Button
                 return
@@ -704,8 +870,14 @@ shutdown /s /f /t 5
 
                 if ($files.Count -gt 0) {
                     if (-not (Test-Path $DestinationPath)) { New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null }
-                    Copy-Item -Path $files[0].FullName -Destination (Join-Path $DestinationPath $files[0].Name) -Force
+                    $destCsv = Join-Path $DestinationPath $files[0].Name
+                    Copy-Item -Path $files[0].FullName -Destination $destCsv -Force
                     $collected = $true
+                    # Read serial from the CSV so we can surface it in the GUI + clipboard
+                    try {
+                        $row = Import-Csv -Path $destCsv | Select-Object -First 1
+                        if ($row) { $script:CollectedSerial = "$($row.'Device Serial Number')" }
+                    } catch { }
                 }
             } finally {
                 if ($partition) { Remove-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction SilentlyContinue }
@@ -716,7 +888,8 @@ shutdown /s /f /t 5
             Start-VM -Name $VMName -ErrorAction SilentlyContinue
 
             if ($collected) {
-                Set-Result -Text '✓ Complete' -Color '#1ACB5F'
+                if ($script:CollectedSerial) { Show-Serial -Value $script:CollectedSerial }
+                Set-Done
             } else {
                 Set-Result -Text 'No hash CSV found on the VM. Mount its VHDX and check C:\HWID\collection.log.' -Color '#F03A47'
             }
@@ -734,6 +907,140 @@ shutdown /s /f /t 5
 
 # --- Wire up + cleanup ----------------------------------------------------
 $RunButton.Add_Click({ Start-Workflow })
+
+# Cleanup hyperlink: opens a modal dialog with all VMs listed for selective or bulk removal
+function Show-CleanupDialog {
+    [xml]$dlgXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VM Cleanup"
+        Width="520" Height="560"
+        WindowStartupLocation="CenterOwner"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        ResizeMode="CanResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="VM Cleanup" FontSize="22" FontWeight="SemiBold"/>
+    <TextBlock Grid.Row="1" Foreground="#909090" FontSize="12" Margin="0,4,0,16" TextWrapping="Wrap"
+               Text="Select VMs to remove. Each VM is stopped, deleted from Hyper-V, and its C:\VMs\&lt;name&gt; folder is wiped."/>
+
+    <ListBox Grid.Row="2" x:Name="VmListBox"
+             Background="#1F1F1F" Foreground="#FFFFFF" BorderBrush="#3A3A3A" BorderThickness="1"
+             SelectionMode="Single"/>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="BtnRemoveSelected" Content="REMOVE SELECTED" Width="170" Height="36" Margin="0,0,8,0"
+              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+      <Button x:Name="BtnRemoveAll" Content="REMOVE ALL" Width="120" Height="36" Margin="0,0,8,0"
+              Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+      <Button x:Name="BtnClose" Content="CLOSE" Width="100" Height="36"
+              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+    </StackPanel>
+  </Grid>
+</Window>
+"@
+    $dlgReader = New-Object System.Xml.XmlNodeReader $dlgXaml
+    $dlg = [Windows.Markup.XamlReader]::Load($dlgReader)
+    $dlg.Owner = $window
+
+    $VmListBox        = $dlg.FindName('VmListBox')
+    $BtnRemoveSel     = $dlg.FindName('BtnRemoveSelected')
+    $BtnRemoveAll     = $dlg.FindName('BtnRemoveAll')
+    $BtnClose         = $dlg.FindName('BtnClose')
+
+    function Update-VmList {
+        $VmListBox.Items.Clear()
+        $vms = Get-VM | Sort-Object Name
+        if (-not $vms) {
+            $tb = New-Object System.Windows.Controls.TextBlock
+            $tb.Text = '(no VMs)'
+            $tb.Foreground = '#707070'
+            $tb.Padding = '8,12,8,12'
+            [void]$VmListBox.Items.Add($tb)
+            return
+        }
+        foreach ($vm in $vms) {
+            $cb = New-Object System.Windows.Controls.CheckBox
+            $cb.Content    = ('{0,-30} {1}' -f $vm.Name, $vm.State)
+            $cb.Tag        = $vm.Name
+            $cb.Foreground = '#FFFFFF'
+            $cb.Margin     = '8,6,8,6'
+            $cb.FontFamily = 'Cascadia Mono, Consolas, Courier New'
+            $cb.FontSize   = 13
+            [void]$VmListBox.Items.Add($cb)
+        }
+    }
+
+    function Get-CheckedNames {
+        $names = @()
+        foreach ($item in $VmListBox.Items) {
+            if ($item -is [System.Windows.Controls.CheckBox] -and $item.IsChecked) { $names += "$($item.Tag)" }
+        }
+        return ,$names
+    }
+
+    function Remove-VMs {
+        param([string[]]$Names)
+        foreach ($n in $Names) {
+            Stop-VM   -Name $n -TurnOff -Force -ErrorAction SilentlyContinue
+            Remove-VM -Name $n -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath "C:\VMs\$n" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $BtnRemoveSel.Add_Click({
+        $names = Get-CheckedNames
+        if ($names.Count -eq 0) {
+            [void][System.Windows.MessageBox]::Show('No VMs are checked.', 'VM Cleanup',
+                [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
+            return
+        }
+        $msg = "Permanently remove $($names.Count) VM(s)?`r`n`r`n" + ($names -join "`r`n")
+        $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Cleanup',
+            [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        Remove-VMs -Names $names
+        Update-VmList
+    })
+
+    $BtnRemoveAll.Add_Click({
+        $names = @()
+        foreach ($item in $VmListBox.Items) {
+            if ($item -is [System.Windows.Controls.CheckBox]) { $names += "$($item.Tag)" }
+        }
+        if ($names.Count -eq 0) { return }
+        $msg = "Permanently remove ALL $($names.Count) VM(s)?`r`n`r`nThis includes VMs you did not create with VM-Pilot."
+        $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Remove ALL',
+            [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        Remove-VMs -Names $names
+        Update-VmList
+    })
+
+    $BtnClose.Add_Click({ $dlg.Close() })
+
+    Update-VmList
+    [void]$dlg.ShowDialog()
+    Set-Status -Text ''
+}
+
+$CleanupButton.Add_Click({ Show-CleanupDialog })
+
+# Open Intune AutoPilot devices page in the default browser
+$IntuneButton.Add_Click({
+    try { Start-Process $script:IntuneAutopilotUrl -ErrorAction Stop }
+    catch { Set-Status -Text "Failed to open browser: $($_.Exception.Message)" }
+})
+
+# Exit: close the host GUI (Closing handler still cleans up runspace/PSInst)
+$ExitButton.Add_Click({ $window.Close() })
 
 $window.Add_Closing({
     if ($script:PSInst)   { try { $script:PSInst.Stop() | Out-Null; $script:PSInst.Dispose() } catch { } }
