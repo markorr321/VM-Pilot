@@ -98,37 +98,41 @@ if ($CreateNew) {
         }
     } while ($nameInvalid)
 
-    # Prompt: VM storage path
-    $defaultVMPath = "C:\VMs"
-    $vmPathInput = Read-Host "VM storage path [default: $defaultVMPath]"
-    $VMPath = if ([string]::IsNullOrWhiteSpace($vmPathInput)) { $defaultVMPath } else { $vmPathInput }
+    # VM storage path: always C:\VMs, auto-created if missing
+    $VMPath = "C:\VMs"
     if (-not (Test-Path $VMPath)) {
         try {
             New-Item -Path $VMPath -ItemType Directory -Force | Out-Null
-            Write-Host "Created folder: $VMPath" -ForegroundColor Green
+            Write-Host "Created VM storage folder: $VMPath" -ForegroundColor Green
         } catch {
             Write-Error "Could not create $VMPath : $_"
             exit 1
         }
     }
 
-    # Prompt: virtual switch (pick from numbered list of existing switches)
+    # Virtual switch: prefer "Default Switch"; fall back to prompt if missing or ambiguous
     $switches = @(Get-VMSwitch)
     if ($switches.Count -eq 0) {
         Write-Error "No Hyper-V virtual switches found. Create one in Hyper-V Manager first."
         exit 1
     }
-    Write-Host "`nAvailable virtual switches:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $switches.Count; $i++) {
-        Write-Host ("  [{0}] {1,-30} Type: {2}" -f ($i + 1), $switches[$i].Name, $switches[$i].SwitchType) -ForegroundColor Yellow
+    $defaultSwitch = $switches | Where-Object Name -eq 'Default Switch' | Select-Object -First 1
+    if ($defaultSwitch) {
+        $VMSwitchName = $defaultSwitch.Name
+        Write-Host "Using virtual switch: $VMSwitchName" -ForegroundColor Green
+    } else {
+        Write-Host "`nAvailable virtual switches:" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $switches.Count; $i++) {
+            Write-Host ("  [{0}] {1,-30} Type: {2}" -f ($i + 1), $switches[$i].Name, $switches[$i].SwitchType) -ForegroundColor Yellow
+        }
+        do {
+            $swSel = Read-Host "Select switch number (1-$($switches.Count))"
+            $swNum = 0
+            $swValid = [int]::TryParse($swSel, [ref]$swNum) -and $swNum -ge 1 -and $swNum -le $switches.Count
+            if (-not $swValid) { Write-Host "Invalid selection." -ForegroundColor Red }
+        } while (-not $swValid)
+        $VMSwitchName = $switches[$swNum - 1].Name
     }
-    do {
-        $swSel = Read-Host "Select switch number (1-$($switches.Count))"
-        $swNum = 0
-        $swValid = [int]::TryParse($swSel, [ref]$swNum) -and $swNum -ge 1 -and $swNum -le $switches.Count
-        if (-not $swValid) { Write-Host "Invalid selection." -ForegroundColor Red }
-    } while (-not $swValid)
-    $VMSwitchName = $switches[$swNum - 1].Name
 
     # Prompt: boot source (ISO for fresh install OR parent VHDX for differencing disk)
     $defaultBootSource = "C:\HyperPilot\Templates\24H2.vhdx"
@@ -150,26 +154,50 @@ if ($CreateNew) {
     } while (-not $bootValid)
     $useParentDisk = ([System.IO.Path]::GetExtension($bootSource).ToLowerInvariant() -eq '.vhdx')
 
-    # Prompt: customize specs (defaults are tuned for Win11 + Autopilot)
-    if ($useParentDisk) {
-        Write-Host "`nDefault VM specs: Generation 2, 4 GB RAM, 2 vCPU, TPM enabled (OS disk size inherited from parent)" -ForegroundColor Cyan
-    } else {
-        Write-Host "`nDefault VM specs: Generation 2, 4 GB RAM, 2 vCPU, 64 GB OS disk, TPM enabled" -ForegroundColor Cyan
+    # CPU cores
+    do {
+        $cpuIn = Read-Host "`nCPU Cores [1, 2, 4] (default 2)"
+        if ([string]::IsNullOrWhiteSpace($cpuIn)) { $cpuCount = 2; break }
+        $n = 0
+        if ([int]::TryParse($cpuIn, [ref]$n) -and ($n -in 1,2,4)) { $cpuCount = $n; break }
+        Write-Host "Invalid. Must be 1, 2, or 4." -ForegroundColor Red
+    } while ($true)
+
+    # RAM
+    do {
+        $ramIn = Read-Host "RAM in GB [4, 8, 16] (default 4)"
+        if ([string]::IsNullOrWhiteSpace($ramIn)) { $ramGB = 4; break }
+        $n = 0
+        if ([int]::TryParse($ramIn, [ref]$n) -and ($n -in 4,8,16)) { $ramGB = $n; break }
+        Write-Host "Invalid. Must be 4, 8, or 16." -ForegroundColor Red
+    } while ($true)
+    $memBytes = [int64]$ramGB * 1GB
+
+    # ISO path also needs OS disk size; parent-disk path inherits from the template
+    if (-not $useParentDisk) { $diskBytes = 64GB }
+
+    # Show config summary and confirm before creating
+    $bootKind = if ($useParentDisk) { "$bootSource (parent VHDX)" } else { "$bootSource (ISO)" }
+    Write-Host "`n$separator" -ForegroundColor Cyan
+    Write-Host "  VM Configuration Summary" -ForegroundColor Cyan
+    Write-Host "$separator" -ForegroundColor Cyan
+    Write-Host ("  VM Name:        {0}" -f $newVMName)     -ForegroundColor Yellow
+    Write-Host ("  Storage path:   {0}" -f $VMPath)        -ForegroundColor Yellow
+    Write-Host ("  Switch:         {0}" -f $VMSwitchName)  -ForegroundColor Yellow
+    Write-Host ("  Boot source:    {0}" -f $bootKind)      -ForegroundColor Yellow
+    Write-Host ("  CPU Cores:      {0}" -f $cpuCount)      -ForegroundColor Yellow
+    Write-Host ("  RAM:            {0} GB" -f $ramGB)      -ForegroundColor Yellow
+    Write-Host ("  Generation:     2")                     -ForegroundColor Yellow
+    Write-Host ("  TPM:            Enabled")               -ForegroundColor Yellow
+    if (-not $useParentDisk) {
+        Write-Host ("  OS Disk:        {0} GB" -f ($diskBytes / 1GB)) -ForegroundColor Yellow
     }
-    $customize = Read-Host "Customize specs? [y/N]"
-    if ($customize -match '^[Yy]') {
-        $memInput = Read-Host "Memory in GB [4]"
-        $cpuInput = Read-Host "vCPU count [2]"
-        $memBytes = if ($memInput) { [int64]$memInput * 1GB } else { 4GB }
-        $cpuCount = if ($cpuInput) { [int]$cpuInput } else { 2 }
-        if (-not $useParentDisk) {
-            $diskInput = Read-Host "OS disk size in GB [64]"
-            $diskBytes = if ($diskInput) { [int64]$diskInput * 1GB } else { 64GB }
-        }
-    } else {
-        $memBytes = 4GB
-        $cpuCount = 2
-        if (-not $useParentDisk) { $diskBytes = 64GB }
+    Write-Host "$separator" -ForegroundColor Cyan
+
+    $confirm = Read-Host "Proceed with VM creation? [Y/n]"
+    if ($confirm -match '^[Nn]') {
+        Write-Host "Aborted by user." -ForegroundColor Red
+        exit 0
     }
 
     # Create the VM (route to -ParentDisk for VHDX, -ISOPath for ISO)
@@ -202,9 +230,8 @@ if ($CreateNew) {
     $VMName = $newVMName
 
     if ($useParentDisk) {
-        # --- Inject the collection bat into the child VHDX, then boot to OOBE ---
-        # VM will land at the OOBE region screen; user runs the bat via Shift+F10.
-        Write-Host "`nInjecting collection script into child VHDX..." -ForegroundColor Cyan
+        # --- Inject the collection bat into the child VHDX, then boot ---
+        Write-Host "`nInjecting collection scripts..." -ForegroundColor Cyan
 
         $childVhd = (Get-VMHardDiskDrive -VMName $newVMName | Select-Object -First 1).Path
         if (-not $childVhd -or -not (Test-Path $childVhd)) {
@@ -220,51 +247,51 @@ if ($CreateNew) {
             }
         }
 
+        # Mount via folder access path (no drive letter — avoids Explorer auto-open popup)
+        $mountFolder = Join-Path $env:TEMP "HWID-Inject-$(Get-Random)"
+        New-Item -Path $mountFolder -ItemType Directory -Force | Out-Null
+
         try {
-            Mount-VHD -Path $childVhd -ErrorAction Stop
+            Mount-VHD -Path $childVhd -NoDriveLetter -ErrorAction Stop
         } catch {
             Write-Error "Failed to mount child VHDX: $_"
+            Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
             exit 1
         }
 
         $injectedPaths = @()
+        $partition = $null
         try {
             $vhdFile  = Split-Path $childVhd -Leaf
             $disk     = Get-Disk | Where-Object { $_.Location -like "*$vhdFile*" }
             $partition = $disk | Get-Partition | Sort-Object Size -Descending | Select-Object -First 1
             if (-not $partition) { throw "Could not find Windows partition on $childVhd" }
 
-            if (-not $partition.DriveLetter) {
-                $usedLetters = Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Name
-                $letter = (67..90 | ForEach-Object { [char]$_ } | Where-Object { $_ -notin $usedLetters }) | Select-Object -First 1
-                if (-not $letter) { throw "No available drive letters" }
-                Set-Partition -InputObject $partition -NewDriveLetter $letter
-                Start-Sleep -Seconds 2
-                $driveLetter = $letter
-            } else {
-                $driveLetter = $partition.DriveLetter
-            }
+            Add-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction Stop
+            Start-Sleep -Seconds 1
 
             foreach ($src in $FilesToCopy) {
                 $leaf = Split-Path $src -Leaf
-                $dst  = Join-Path "${driveLetter}:\" $leaf
+                $dst  = Join-Path $mountFolder $leaf
                 Copy-Item -Path $src -Destination $dst -Force
                 $injectedPaths += "C:\$leaf"
-                Write-Host "✓ Injected: C:\$leaf" -ForegroundColor Green
             }
 
-            # Also drop the first bat as %WINDIR%\Setup\Scripts\SetupComplete.cmd.
-            # Windows auto-runs SetupComplete.cmd from this exact path after specialize,
-            # before OOBE shows — no unattend.xml dance required.
-            $setupScriptsDir = "${driveLetter}:\Windows\Setup\Scripts"
+            # Also drop the first bat as %WINDIR%\Setup\Scripts\SetupComplete.cmd
+            # so Windows auto-runs it after specialize (before OOBE).
+            $setupScriptsDir = Join-Path $mountFolder "Windows\Setup\Scripts"
             if (-not (Test-Path $setupScriptsDir)) {
                 New-Item -Path $setupScriptsDir -ItemType Directory -Force | Out-Null
             }
             $setupCompletePath = Join-Path $setupScriptsDir "SetupComplete.cmd"
             Copy-Item -Path $FilesToCopy[0] -Destination $setupCompletePath -Force
-            Write-Host "✓ Injected: $setupCompletePath (auto-runs at first boot)" -ForegroundColor Green
+            Write-Host "✓ Scripts injected" -ForegroundColor Green
         } finally {
+            if ($partition) {
+                Remove-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction SilentlyContinue
+            }
             Dismount-VHD -Path $childVhd -ErrorAction SilentlyContinue
+            Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
         }
 
         # Phase 1 (Copy-VMFile) is unnecessary now — the bat is already on the disk.
@@ -273,18 +300,17 @@ if ($CreateNew) {
         # Boot the VM (will run collection via specialize, then shut itself down)
         Write-Host "`nStarting VM..." -ForegroundColor Cyan
         Start-VM -Name $newVMName -ErrorAction Stop
-        Write-Host "✓ VM started — Windows will auto-collect HWID, then shut down." -ForegroundColor Green
+        Write-Host "✓ VM started" -ForegroundColor Green
 
         # Auto-launch vmconnect so the user can watch progress
         try {
             Start-Process vmconnect.exe -ArgumentList 'localhost', $newVMName -ErrorAction Stop
-            Write-Host "✓ vmconnect launched for '$newVMName' (watch progress)" -ForegroundColor Green
         } catch {
             Write-Warning "Could not auto-launch vmconnect: $_"
         }
 
         # Poll for VM to shut itself down after RunSynchronousCommand completes
-        Write-Host "`nWaiting for VM to complete collection and shut down..." -ForegroundColor Yellow
+        Write-Host "`nWaiting for collection to complete..." -ForegroundColor Yellow
         $maxWait = 900  # 15 minutes
         $elapsed = 0
         $shutdown = $false
@@ -293,16 +319,15 @@ if ($CreateNew) {
             if ($state -eq 'Off') { $shutdown = $true; break }
             Start-Sleep -Seconds 5
             $elapsed += 5
-            if ($elapsed % 30 -eq 0) {
-                Write-Host "  ...waiting (${elapsed}s elapsed, state=$state)" -ForegroundColor Gray
+            if ($elapsed -eq 60 -or $elapsed % 120 -eq 0) {
+                Write-Host "  ...still waiting (${elapsed}s)" -ForegroundColor Gray
             }
         }
         if (-not $shutdown) {
-            Write-Warning "VM did not shut down within $maxWait seconds. Forcing shutdown to continue extraction."
+            Write-Warning "VM did not shut down within $maxWait seconds. Forcing off."
             Stop-VM -Name $newVMName -TurnOff -Force -ErrorAction SilentlyContinue
-        } else {
-            Write-Host "✓ VM has shut down — proceeding to file extraction" -ForegroundColor Green
         }
+        Write-Host "✓ Collection complete" -ForegroundColor Green
     } else {
         # ISO install path — still requires a human at vmconnect
         Write-Host "`n$separator" -ForegroundColor Yellow
@@ -491,231 +516,103 @@ Read-Host "`nPress Enter to continue"
 # STEP 4: COPY FILES FROM VM
 # ============================================================================
 
-Write-Host "`n$separator" -ForegroundColor Cyan
-Write-Host "  PHASE 3: Collect Files FROM VM" -ForegroundColor Cyan
-Write-Host "$separator" -ForegroundColor Cyan
+Write-Host "`nExtracting CSV..." -ForegroundColor Cyan
 
-# Get VHD path
-Write-Host "`nGetting VHD path..." -ForegroundColor Cyan
 $vm = Get-VM -Name $VMName
 $vhdPath = ($vm | Select-Object -ExpandProperty HardDrives).Path
 if (-not $vhdPath) {
     Write-Error "Could not determine VHD path"
     exit 1
 }
-Write-Host "VHD Path: $vhdPath" -ForegroundColor Yellow
 
-# Stop VM if running
+# Stop VM if still running
 if ($vm.State -eq "Running") {
-    Write-Host "`nStopping VM..." -ForegroundColor Yellow
     Stop-VM -Name $VMName -Force
-    
-    # Wait for VM to fully stop with progress indicator
-    $timeout = 60
-    $elapsed = 0
-    Write-Host "Waiting for VM to shut down" -NoNewline
+    $timeout = 60; $elapsed = 0
     while ((Get-VM -Name $VMName).State -ne "Off" -and $elapsed -lt $timeout) {
-        Start-Sleep -Seconds 1
-        Write-Host "." -NoNewline
-        $elapsed++
+        Start-Sleep -Seconds 1; $elapsed++
     }
-    Write-Host ""
-    
     if ((Get-VM -Name $VMName).State -ne "Off") {
         Write-Error "VM did not stop within timeout period"
         exit 1
     }
-    
-    # Additional delay to ensure VM resources are fully released
-    Write-Host "VM stopped, waiting for resources to release..." -ForegroundColor Yellow
     Start-Sleep -Seconds 3
-    Write-Host "✓ VM stopped and ready" -ForegroundColor Green
 }
 
-# Mount VHD
-Write-Host "`nMounting VHD (read-only)..." -ForegroundColor Cyan
-$mountRetries = 3
-$mountSuccess = $false
-
-for ($i = 1; $i -le $mountRetries; $i++) {
+# Mount VHD read-only without drive letter (avoids Explorer popup)
+for ($i = 1; $i -le 3; $i++) {
     try {
-        Mount-VHD -Path $vhdPath -ReadOnly -ErrorAction Stop
-        Write-Host "✓ VHD mounted" -ForegroundColor Green
-        $mountSuccess = $true
+        Mount-VHD -Path $vhdPath -ReadOnly -NoDriveLetter -ErrorAction Stop
         break
     } catch {
-        if ($i -lt $mountRetries) {
-            Write-Host "Mount attempt $i failed, retrying in 2 seconds..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
-        } else {
-            Write-Error "Failed to mount VHD after $mountRetries attempts: $_"
-            exit 1
-        }
+        if ($i -lt 3) { Start-Sleep -Seconds 2 }
+        else { Write-Error "Failed to mount VHD after 3 attempts: $_"; exit 1 }
     }
 }
 
-if (-not $mountSuccess) {
-    Write-Error "Could not mount VHD"
-    exit 1
-}
-
-# Assign drive letter
-Write-Host "`nAssigning drive letter..." -ForegroundColor Cyan
-$driveLetter = $null
+# Attach via temp folder mount point (avoids Explorer auto-open popup)
+$mountFolder = Join-Path $env:TEMP "HWID-Extract-$(Get-Random)"
+New-Item -Path $mountFolder -ItemType Directory -Force | Out-Null
+$partition = $null
 try {
     $vhdFileName = Split-Path $vhdPath -Leaf
     $disk = Get-Disk | Where-Object {$_.Location -like "*$vhdFileName*"}
     $partition = $disk | Get-Partition | Where-Object {$_.Size -gt 50GB} | Select-Object -First 1
-    
-    if ($partition) {
-        # Find available drive letter
-        $usedLetters = Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Name
-        $availableLetter = (67..90 | ForEach-Object {[char]$_} | Where-Object {$_ -notin $usedLetters}) | Select-Object -First 1
-        
-        if ($availableLetter) {
-            Set-Partition -InputObject $partition -NewDriveLetter $availableLetter
-            $driveLetter = $availableLetter
-            Write-Host "Drive letter assigned: ${driveLetter}:" -ForegroundColor Yellow
-            
-            # Wait for drive to be accessible
-            Write-Host "Waiting for drive to be ready" -NoNewline
-            $driveReady = $false
-            $maxWait = 15
-            for ($w = 0; $w -lt $maxWait; $w++) {
-                Start-Sleep -Seconds 1
-                Write-Host "." -NoNewline
-                try {
-                    $testPath = "${driveLetter}:\"
-                    $null = Get-Item $testPath -ErrorAction Stop
-                    $driveReady = $true
-                    break
-                } catch {
-                    # Drive not ready yet
-                }
-            }
-            Write-Host ""
-            
-            if (-not $driveReady) {
-                throw "Drive ${driveLetter}: assigned but not accessible after $maxWait seconds"
-            }
-            
-            Write-Host "✓ Drive ${driveLetter}:\ is ready" -ForegroundColor Green
-        } else {
-            throw "No available drive letters"
-        }
-    } else {
-        throw "Could not find suitable partition"
-    }
+    if (-not $partition) { throw "Could not find suitable partition" }
+    Add-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction Stop
+    Start-Sleep -Seconds 1
 } catch {
-    Write-Error "Failed to assign drive letter: $_"
+    Write-Error "Failed to attach VHD mount point: $_"
     Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue
+    Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
     exit 1
 }
 
-# Search for files
-Write-Host "`nSearching for files..." -ForegroundColor Cyan
-$sourcePath = "${driveLetter}:\"
-if ($SourceFolder) {
-    $searchPath = Join-Path $sourcePath $SourceFolder
-    if (Test-Path $searchPath) {
-        $sourcePath = $searchPath
-    }
-}
-
-$files = Get-ChildItem -Path $sourcePath -Filter $SearchPattern -Recurse -File -ErrorAction SilentlyContinue | 
-    Sort-Object LastWriteTime -Descending
-
-if ($files.Count -eq 0) {
-    Write-Warning "No files matching `"$SearchPattern`" found in $sourcePath"
-    Write-Host "`nListing root directory contents:" -ForegroundColor Yellow
-    Get-ChildItem "${driveLetter}:\" | Format-Table Name, LastWriteTime, Length
-    $collectedCount = 0
-} else {
-    Write-Host "Found $($files.Count) file(s) (sorted by newest first):" -ForegroundColor Green
-    $files | ForEach-Object { 
-        Write-Host "  - $($_.Name) (Modified: $($_.LastWriteTime))" -ForegroundColor Yellow 
-    }
-    
-    # Get only the newest file
-    $newestFile = $files[0]
-    Write-Host "`nNewest file: $($newestFile.Name) - $($newestFile.LastWriteTime)" -ForegroundColor Cyan
-    
-    # Create destination folder if needed
-    if (-not (Test-Path $DestinationPath)) {
-        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
-        Write-Host "Created destination folder: $DestinationPath" -ForegroundColor Green
-    }
-    
-    # Copy only the newest file
-    Write-Host "`nCopying newest file..." -ForegroundColor Cyan
-    $collectedCount = 0
-    try {
-        $destFile = Join-Path $DestinationPath $newestFile.Name
-        Copy-Item -Path $newestFile.FullName -Destination $destFile -Force
-        Write-Host "  ✓ Copied: $($newestFile.Name)" -ForegroundColor Green
-        $collectedCount = 1
-    } catch {
-        Write-Host "  ✗ Failed: $($newestFile.Name) - $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-# Dismount VHD
-Write-Host "`nDismounting VHD..." -ForegroundColor Cyan
+# Find newest matching file
+$collectedCount = 0
 try {
-    Dismount-VHD -Path $vhdPath -ErrorAction Stop
-    Write-Host "✓ VHD dismounted" -ForegroundColor Green
-} catch {
-    Write-Warning "Failed to dismount VHD: $_"
-    Write-Warning "You may need to manually dismount: Dismount-VHD -Path `"$vhdPath`""
+    $sourcePath = $mountFolder
+    if ($SourceFolder) {
+        $searchPath = Join-Path $sourcePath $SourceFolder
+        if (Test-Path $searchPath) { $sourcePath = $searchPath }
+    }
+    $files = Get-ChildItem -Path $sourcePath -Filter $SearchPattern -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending
+
+    if ($files.Count -eq 0) {
+        Write-Warning "No files matching '$SearchPattern' found on the VM"
+    } else {
+        $newestFile = $files[0]
+        if (-not (Test-Path $DestinationPath)) {
+            New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+        }
+        try {
+            Copy-Item -Path $newestFile.FullName -Destination (Join-Path $DestinationPath $newestFile.Name) -Force
+            Write-Host "✓ Copied: $($newestFile.Name)" -ForegroundColor Green
+            $collectedCount = 1
+        } catch {
+            Write-Host "✗ Failed to copy $($newestFile.Name): $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+} finally {
+    if ($partition) {
+        Remove-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction SilentlyContinue
+    }
+    Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue
+    Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
 }
 
-# Restart VM
-Write-Host "`nRestarting VM..." -ForegroundColor Cyan
-Start-VM -Name $VMName
-
-# Wait for VM to be fully running
-Write-Host "Waiting for VM to start" -NoNewline
-$startTimeout = 60
-$startElapsed = 0
-while ((Get-VM -Name $VMName).State -ne "Running" -and $startElapsed -lt $startTimeout) {
-    Start-Sleep -Seconds 1
-    Write-Host "." -NoNewline
-    $startElapsed++
-}
-Write-Host ""
-
-if ((Get-VM -Name $VMName).State -eq "Running") {
-    Write-Host "✓ VM is running" -ForegroundColor Green
-    # Additional delay for VM to fully initialize
-    Write-Host "Waiting for VM to fully initialize (30 seconds)..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 30
-    Write-Host "✓ VM initialization complete" -ForegroundColor Green
-} else {
-    Write-Warning "VM did not start within timeout period"
-}
+# Start the VM so it's ready to use after the workflow exits
+Start-VM -Name $VMName -ErrorAction SilentlyContinue
 
 # ============================================================================
 # FINAL SUMMARY
 # ============================================================================
 
-Write-Host "`n$separator" -ForegroundColor Cyan
-Write-Host "  WORKFLOW COMPLETE" -ForegroundColor Cyan
-Write-Host "$separator" -ForegroundColor Cyan
-Write-Host "VM Name:              $VMName"
-Write-Host "Files Copied TO VM:   $successCount" -ForegroundColor Green
-Write-Host "Files Collected:      $collectedCount" -ForegroundColor Green
 if ($collectedCount -gt 0) {
-    Write-Host "Collection Location:  $DestinationPath" -ForegroundColor Green
-}
-Write-Host "VM Status:            Running" -ForegroundColor Green
-Write-Host "$separator" -ForegroundColor Cyan
-
-if ($collectedCount -gt 0) {
-    Write-Host "`n✓ SUCCESS: Workflow completed successfully!" -ForegroundColor Green
-    Write-Host "Your HWID files are ready at: $DestinationPath" -ForegroundColor White
+    Write-Host "`n✓ Done. HWID saved to: $DestinationPath" -ForegroundColor Green
 } else {
-    Write-Host "`n⚠ WARNING: No files were collected from the VM" -ForegroundColor Yellow
-    Write-Host "Please verify the scripts ran successfully on the VM" -ForegroundColor White
+    Write-Host "`n⚠ No files were collected from the VM" -ForegroundColor Yellow
 }
 
 Write-Host "`nPress Enter to Exit" -ForegroundColor Red -NoNewline
