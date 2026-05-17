@@ -722,6 +722,90 @@ function Get-CheckedRadio {
     return $Default
 }
 
+# First-time setup dialog. Runs on the main UI thread (called from
+# Start-Workflow BEFORE the runspace spawns) — that's deliberate.
+# Showing it via Dispatcher.Invoke from inside the workflow runspace
+# leaves the WPF click handlers in a scope context where they silently
+# never fire, even with GetNewClosure(). Doing it inline here is the
+# clean fix. Returns @{ Source = 'UUPDump'|'Browse'|'Cancel'; IsoPath = '' }.
+function Show-IsoSourceDialog {
+    param([string]$ReleaseLabel)
+
+    [xml]$x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Build Windows VHDX" Width="540" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Build Windows VHDX" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,8"/>
+    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,18"
+               Text="No cached parent VHDX for $ReleaseLabel was found. Pick where to source the Windows 11 install media:"/>
+
+    <StackPanel Grid.Row="2" Orientation="Vertical">
+      <Button x:Name="BtnUUPDump" Height="50" Margin="0,0,0,10"
+              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
+              HorizontalContentAlignment="Left" Padding="14,0,0,0">
+        <Button.Content>
+          <StackPanel>
+            <TextBlock Text="Download via UUP Dump  (recommended)"/>
+            <TextBlock Text="Pulls from Windows Update CDN. Works on corporate networks. ~15-20 min."
+                       Foreground="#D0E5FA" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Button.Content>
+      </Button>
+      <Button x:Name="BtnBrowse" Height="50" Margin="0,0,0,10"
+              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
+              HorizontalContentAlignment="Left" Padding="14,0,0,0">
+        <Button.Content>
+          <StackPanel>
+            <TextBlock Text="Browse for an existing ISO..."/>
+            <TextBlock Text="Use a Windows 11 ISO you already have (Visual Studio, VLSC, MSDN, USB)."
+                       Foreground="#909090" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Button.Content>
+      </Button>
+    </StackPanel>
+
+    <Button Grid.Row="3" x:Name="BtnCancel" Content="CANCEL"
+            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,12,0,0"
+            Background="#1F1F1F" Foreground="#C0C0C0" BorderThickness="0"
+            FontWeight="SemiBold" Cursor="Hand"/>
+  </Grid>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $dlg.Owner = $window
+    $result = @{ Source = 'Cancel'; IsoPath = '' }
+
+    $dlg.FindName('BtnUUPDump').Add_Click({ $result.Source = 'UUPDump'; $dlg.Close() })
+    $dlg.FindName('BtnBrowse').Add_Click({
+        $ofd = New-Object Microsoft.Win32.OpenFileDialog
+        $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
+        $ofd.Title       = "Pick a Windows 11 $ReleaseLabel ISO"
+        $ofd.Multiselect = $false
+        if ($ofd.ShowDialog($dlg)) {
+            $result.Source  = 'Browse'
+            $result.IsoPath = $ofd.FileName
+            $dlg.Close()
+        }
+    })
+    $dlg.FindName('BtnCancel').Add_Click({ $result.Source = 'Cancel'; $dlg.Close() })
+
+    [void]$dlg.ShowDialog()
+    return $result
+}
+
 # --- Workflow runspace ----------------------------------------------------
 $script:Runspace = $null
 $script:PSInst   = $null
@@ -742,6 +826,22 @@ function Start-Workflow {
     if ([string]::IsNullOrWhiteSpace($vmName)) {
         Set-Result -Text 'VM name cannot be empty.' -Color '#F03A47'
         return
+    }
+
+    # If no cached VHDX for this release exists, ask the user how to source
+    # the ISO before spawning the runspace. Done on the UI thread because
+    # WPF click handlers misbehave when shown via Dispatcher.Invoke from
+    # inside the workflow runspace.
+    $isoSource = $null
+    $isoPath   = $null
+    if (-not (Test-Path $bootSource -PathType Leaf)) {
+        $choice = Show-IsoSourceDialog -ReleaseLabel $release
+        if (-not $choice -or $choice.Source -eq 'Cancel') {
+            Set-Status -Text 'Cancelled.'
+            return
+        }
+        $isoSource = $choice.Source
+        $isoPath   = $choice.IsoPath
     }
 
     Hide-CompletedIcon
@@ -768,6 +868,8 @@ function Start-Workflow {
         Release             = $release
         ScriptDir           = $PSScriptRoot
         BootSource      = $bootSource            # per-release override
+        IsoSource       = $isoSource             # 'UUPDump' / 'Browse' / $null (cached)
+        IsoPath         = $isoPath               # only set when IsoSource = 'Browse'
         BuilderScript   = $script:BuilderScript
         VMPath          = $script:VMPath
         FilesToCopy     = $script:FilesToCopy
@@ -856,96 +958,7 @@ function Start-Workflow {
             })
         }
 
-        # First-time setup: ask where the Windows 11 ISO should come from.
-        # Returns @{ Source = 'UUPDump'|'Browse'|'Fido'|'Cancel'; IsoPath = '' }.
-        function Show-IsoSourceDialog {
-            param([string]$ReleaseLabel)
-            $script:__isoSource = 'Cancel'
-            $script:__isoBrowsePath = ''
-            $Window.Dispatcher.Invoke([Action]{
-                [xml]$x = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Build Windows VHDX" Width="540" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        Background="#161616" Foreground="#FFFFFF"
-        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
-  <Grid Margin="24">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-    </Grid.RowDefinitions>
 
-    <TextBlock Grid.Row="0" Text="Build Windows VHDX" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,8"/>
-    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,18"
-               Text="No cached parent VHDX for $ReleaseLabel was found. Pick where to source the Windows 11 install media:"/>
-
-    <StackPanel Grid.Row="2" Orientation="Vertical">
-      <Button x:Name="BtnUUPDump" Height="50" Margin="0,0,0,10"
-              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
-              HorizontalContentAlignment="Left" Padding="14,0,0,0">
-        <Button.Content>
-          <StackPanel>
-            <TextBlock Text="Download via UUP Dump  (recommended)"/>
-            <TextBlock Text="Pulls from Windows Update CDN. Works on corporate networks. 30-60 min."
-                       Foreground="#D0E5FA" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
-          </StackPanel>
-        </Button.Content>
-      </Button>
-      <Button x:Name="BtnBrowse" Height="50" Margin="0,0,0,10"
-              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
-              HorizontalContentAlignment="Left" Padding="14,0,0,0">
-        <Button.Content>
-          <StackPanel>
-            <TextBlock Text="Browse for an existing ISO..."/>
-            <TextBlock Text="Use a Windows 11 ISO you already have (Visual Studio, VLSC, MSDN, USB)."
-                       Foreground="#909090" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
-          </StackPanel>
-        </Button.Content>
-      </Button>
-    </StackPanel>
-
-    <Button Grid.Row="3" x:Name="BtnCancel" Content="CANCEL"
-            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,12,0,0"
-            Background="#1F1F1F" Foreground="#C0C0C0" BorderThickness="0"
-            FontWeight="SemiBold" Cursor="Hand"/>
-  </Grid>
-</Window>
-"@
-                # Store the dialog in $script: scope so handlers can close it
-                # without depending on PowerShell closure semantics (which are
-                # unreliable for handlers registered across the Dispatcher
-                # thread boundary from a runspace). GetNewClosure() further
-                # locks in the lexical scope at registration time.
-                $script:__isoDlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
-                $script:__isoDlg.Owner = $Window
-                $script:__isoDlg.FindName('BtnUUPDump').Add_Click({
-                    $script:__isoSource = 'UUPDump'
-                    $script:__isoDlg.Close()
-                }.GetNewClosure())
-                $script:__isoDlg.FindName('BtnBrowse').Add_Click({
-                    $ofd = New-Object Microsoft.Win32.OpenFileDialog
-                    $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
-                    $ofd.Title       = "Pick a Windows 11 ISO"
-                    $ofd.Multiselect = $false
-                    if ($ofd.ShowDialog($script:__isoDlg)) {
-                        $script:__isoSource     = 'Browse'
-                        $script:__isoBrowsePath = $ofd.FileName
-                        $script:__isoDlg.Close()
-                    }
-                }.GetNewClosure())
-                $script:__isoDlg.FindName('BtnCancel').Add_Click({
-                    $script:__isoSource = 'Cancel'
-                    $script:__isoDlg.Close()
-                }.GetNewClosure())
-                [void]$script:__isoDlg.ShowDialog()
-            })
-            return @{ Source = $script:__isoSource; IsoPath = $script:__isoBrowsePath }
-        }
 
         try {
             # ===== VHDX template =====
@@ -958,10 +971,11 @@ function Start-Workflow {
                     return
                 }
 
-                # Ask the user where the ISO should come from.
-                $choice = Show-IsoSourceDialog -ReleaseLabel $Release
-                if (-not $choice -or $choice.Source -eq 'Cancel') {
-                    Set-Status 'Cancelled.'
+                # The user's ISO source was picked on the UI thread before this
+                # runspace spawned (see Show-IsoSourceDialog at script scope).
+                # We receive the result in $IsoSource + $IsoPath via sharedVars.
+                if (-not $IsoSource) {
+                    Set-Result -Text 'Internal error: no IsoSource provided.' -Color '#F03A47'
                     Restore-Button
                     return
                 }
@@ -971,11 +985,12 @@ function Start-Workflow {
                     New-Item -Path $fidoCacheDir -ItemType Directory -Force | Out-Null
                 }
 
-                # Resolve $isoPath depending on the chosen source. $null = let
-                # the builder fall back to its own Fido pipeline.
-                $isoPath = $null
+                # Resolve the local ISO path to feed the builder. UUPDump path
+                # invokes the helper here in the runspace; Browse already has
+                # the path from the file picker that ran on the UI thread.
+                $resolvedIsoPath = $null
 
-                if ($choice.Source -eq 'UUPDump') {
+                if ($IsoSource -eq 'UUPDump') {
                     $uupHelper = Join-Path $ScriptDir 'Get-UUPDumpISO.ps1'
                     if (-not (Test-Path $uupHelper)) {
                         Set-Result -Text "Get-UUPDumpISO.ps1 not found at $uupHelper. Reinstall the module." -Color '#F03A47'
@@ -1006,8 +1021,8 @@ function Start-Workflow {
                             elseif ($line -match '^Building ISO')                              { Set-Status 'Building ISO image…' }
                             $line
                         }
-                        $isoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
-                        if (-not $isoPath) {
+                        $resolvedIsoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
+                        if (-not $resolvedIsoPath) {
                             throw 'UUP Dump helper completed but did not return a valid ISO path.'
                         }
                     } catch {
@@ -1015,23 +1030,23 @@ function Start-Workflow {
                         Restore-Button
                         return
                     }
-                } elseif ($choice.Source -eq 'Browse') {
-                    if (-not (Test-Path $choice.IsoPath)) {
-                        Set-Result -Text "Selected ISO not found: $($choice.IsoPath)" -Color '#F03A47'
+                } elseif ($IsoSource -eq 'Browse') {
+                    if (-not (Test-Path $IsoPath)) {
+                        Set-Result -Text "Selected ISO not found: $IsoPath" -Color '#F03A47'
                         Restore-Button
                         return
                     }
-                    $isoPath = $choice.IsoPath
-                    Set-Status "Using ISO: $isoPath"
+                    $resolvedIsoPath = $IsoPath
+                    Set-Status "Using ISO: $resolvedIsoPath"
                 } else {
-                    Set-Result -Text "Unknown ISO source '$($choice.Source)'." -Color '#F03A47'
+                    Set-Result -Text "Unknown ISO source '$IsoSource'." -Color '#F03A47'
                     Restore-Button
                     return
                 }
 
                 Set-Status 'Building Windows VHDX template…'
                 try {
-                    $builderArgs = @('-Release', $Release, '-Edition', 'Pro', '-OutVhdx', $BootSource, '-WorkDir', $fidoCacheDir, '-IsoPath', $isoPath)
+                    $builderArgs = @('-Release', $Release, '-Edition', 'Pro', '-OutVhdx', $BootSource, '-WorkDir', $fidoCacheDir, '-IsoPath', $resolvedIsoPath)
                     & $BuilderScript @builderArgs 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
