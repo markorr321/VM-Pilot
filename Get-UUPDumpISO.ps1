@@ -87,18 +87,55 @@ if (-not $builds) {
     throw "UUP Dump API returned no builds matching '$search'."
 }
 
-# Latest = highest build number, English (avoid pre-release rings if possible)
-$latest = $builds | Sort-Object @{Expression = { [int]($_.build -replace '\..*','') }; Descending = $true} |
-                    Select-Object -First 1
+# Search hits include lots of non-OS packages (cumulative updates,
+# .NET Framework, Defender, Edge, Service Stack, etc.). Filter to actual
+# OS feature-release builds — UUP Dump titles them
+# "Windows 11, version 25H2 (26200.XXXX)". Arch is a separate field (when
+# present), not in the title — prefer amd64 if the API exposes it, accept
+# anything if it doesn't.
+$titlePattern = "^Windows 11, version $Release\s*\("
+$osBuilds = $builds | Where-Object {
+    $_.title -match $titlePattern -and
+    (-not ($_.PSObject.Properties.Name -contains 'arch') -or $_.arch -eq 'amd64')
+}
+if (-not $osBuilds) {
+    throw ("Found $($builds.Count) builds for '$search' but none matched the OS title pattern '$titlePattern'.`n" +
+           "Sample titles:`n  - " + (($builds | Select-Object -First 5).title -join "`n  - "))
+}
+
+# Highest build number wins
+$latest = $osBuilds | Sort-Object @{Expression = { [int]($_.build -replace '\..*','') }; Descending = $true} |
+                      Select-Object -First 1
 $buildId   = $latest.uuid
 $buildName = $latest.title
 Write-Host "[UUP] Selected build: $buildName"
 Write-Host "[UUP] Build UUID: $buildId"
 
+# Extracts language/edition keys from a UUP Dump response. The API returns
+# either a hashtable-like object (real data) or an empty array (no data,
+# usually because we picked the wrong build). PSObject.Properties.Name on
+# an empty array returns the array's own properties (Length, LongLength,
+# etc.) — not useful. Filter to short token-like strings to drop that noise.
+function Get-UUPKeys {
+    param($Container)
+    if (-not $Container) { return @() }
+    @($Container.PSObject.Properties.Name) | Where-Object {
+        # Language codes look like 'en-us', 'zh-tw'; edition slugs are
+        # short identifiers like 'Professional', 'CoreSingleLanguage'.
+        # The array-property noise (Length, IsReadOnly, ...) doesn't fit
+        # either pattern.
+        $_ -match '^[a-z]{2,3}(-[a-z]{2,4})?$' -or
+        $_ -match '^[A-Z][A-Za-z]{2,}$'
+    }
+}
+
 # --- Verify language is available ---------------------------------------
 $langResp = Invoke-RestMethod -Method Get -Uri 'https://api.uupdump.net/listlangs.php' `
                               -Body @{ id = $buildId } -ErrorAction Stop
-$availableLangs = @($langResp.response.langFancyNames.PSObject.Properties.Name)
+$availableLangs = Get-UUPKeys $langResp.response.langFancyNames
+if (-not $availableLangs) {
+    throw "UUP Dump returned no language list for build $buildId — likely wrong build kind."
+}
 if ($Language -notin $availableLangs) {
     throw "Language '$Language' not available. Available: $($availableLangs -join ', ')"
 }
@@ -106,7 +143,10 @@ if ($Language -notin $availableLangs) {
 # --- Verify edition is available ----------------------------------------
 $edResp = Invoke-RestMethod -Method Get -Uri 'https://api.uupdump.net/listeditions.php' `
                             -Body @{ id = $buildId; lang = $Language } -ErrorAction Stop
-$availableEditions = @($edResp.response.editionFancyNames.PSObject.Properties.Name)
+$availableEditions = Get-UUPKeys $edResp.response.editionFancyNames
+if (-not $availableEditions) {
+    throw "UUP Dump returned no edition list for build $buildId / $Language."
+}
 if ($Edition -notin $availableEditions) {
     throw "Edition '$Edition' not available for $Language. Available: $($availableEditions -join ', ')"
 }
@@ -144,6 +184,34 @@ if (Test-Path $iniPath) {
     Set-Content $iniPath
 } else {
     Write-Warning "ConvertConfig.ini not found at $iniPath — conversion may prompt interactively."
+}
+
+# --- Patch get_aria2.ps1 for managed-PS environments --------------------
+# UUP Dump's get_aria2.ps1 calls Get-FileHash to verify the aria2c download.
+# On some Windows PowerShell 5.1 hosts (typically managed/locked-down boxes
+# with module-autoloading suppressed) the cmdlet isn't resolvable in the
+# context the cmd script invokes powershell in, even though it works fine
+# from a normal PS prompt. Inject a .NET-based fallback at the top so the
+# verify step works either way; the real cmdlet still wins when available.
+$getAria = Join-Path $packDir 'files\get_aria2.ps1'
+if (Test-Path $getAria) {
+    Write-Host '[UUP] Patching get_aria2.ps1 with a Get-FileHash fallback...'
+    $shim = @'
+if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
+    function Get-FileHash {
+        param([string]$Path, [string]$Algorithm = 'SHA256')
+        $h = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
+        $s = [IO.File]::OpenRead($Path)
+        try {
+            $b = $h.ComputeHash($s)
+            return [PSCustomObject]@{ Algorithm = $Algorithm; Hash = ([BitConverter]::ToString($b) -replace '-',''); Path = $Path }
+        } finally { $s.Close() }
+    }
+}
+
+'@
+    $orig = Get-Content $getAria -Raw
+    Set-Content -Path $getAria -Value ($shim + $orig) -Encoding UTF8 -NoNewline
 }
 
 # --- Run the conversion script ------------------------------------------
