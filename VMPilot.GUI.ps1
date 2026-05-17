@@ -1121,7 +1121,9 @@ function Start-Workflow {
                         elseif ($line -match 'Using image index')           { Set-Status 'Reading install image…' }
                         elseif ($line -match 'Creating .*GB, dynamic')      { Set-Status 'Creating empty VHDX…' }
                         elseif ($line -match 'Applying image')              { Set-Status 'Applying Windows image (slow)…' }
+                        elseif ($line -match 'DISM apply verified')         { Set-Status 'DISM apply verified — install.wim extracted cleanly' }
                         elseif ($line -match 'Writing UEFI')                { Set-Status 'Writing UEFI boot files…' }
+                        elseif ($line -match 'Boot files verified')         { Set-Status 'UEFI boot files verified — VHDX is bootable' }
                         elseif ($line -match 'Dismounting')                 { Set-Status 'Finalizing VHDX…' }
                     }
                 } catch {
