@@ -1016,6 +1016,13 @@ function Start-Workflow {
                             elseif ($line -match '^Downloading aria2c')                        { Set-Status 'Downloading aria2c…' }
                             elseif ($line -match '^Verifying aria2c')                          { Set-Status 'Verifying aria2c…' }
                             elseif ($line -match '^Downloading the UUP converter')             { Set-Status 'Downloading UUP converter…' }
+                            elseif ($line -match '^Extracting UUP converter')                  { Set-Status 'Extracting UUP converter…' }
+                            elseif ($line -match '^Retrieving aria2 script for Microsoft Store') { Set-Status 'Preparing Microsoft Store Apps download…' }
+                            elseif ($line -match '^Downloading Microsoft Store Apps')          { Set-Status 'Downloading Microsoft Store Apps…' }
+                            elseif ($line -match '^=== Detecting UUP editions')                { Set-Status 'Detecting UUP editions…' }
+                            elseif ($line -match '^=== Running UUP Converter')                 { Set-Status 'Starting UUP Converter…' }
+                            elseif ($line -match '^=== Parsing Apps CompDB')                   { Set-Status 'Parsing apps database…' }
+                            elseif ($line -match '^=== Preparing Reference ESDs')              { Set-Status 'Preparing reference ESDs…' }
                             elseif ($line -match '^=== Creating install.wim')                  { Set-Status 'Building install.wim (LZX compress, slowest single step)…'; Set-Progress 0 }
                             elseif ($line -match '^=== Creating Setup Media Layout')           { Set-Status 'Creating setup media layout…'; Set-Progress -1 }
                             elseif ($line -match '^=== Updating install.wim')                  { Set-Status 'Integrating updates into install.wim…'; Set-Progress -1 }
