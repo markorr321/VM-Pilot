@@ -978,7 +978,7 @@ function Start-Workflow {
                             if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…' }
                             elseif ($line -match '^\[UUP\] Selected build: (.+)$')             { Set-Status "Selected build: $($Matches[1])" }
                             elseif ($line -match '^\[UUP\] Downloading conversion script pack'){ Set-Status 'Downloading UUP Dump conversion pack…' }
-                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 30-60 min)…' }
+                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 15-20 min)…' }
                             elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…' }
                             $line
                         }

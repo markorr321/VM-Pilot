@@ -26,11 +26,23 @@
 .PARAMETER WorkDir
   Where to extract the pack and run the conversion. Needs ~30 GB free.
 
+.PARAMETER IncludeUpdates
+  Integrate cumulative updates, SSU, .NET, and security patches into the
+  resulting ISO. Adds 30-50 min to the build. Off by default — VM-Pilot
+  only needs the base OS to collect a hardware hash, and the resulting
+  VM is thrown away in minutes, so integrating updates is wasted work.
+
 .EXAMPLE
   PS> .\Get-UUPDumpISO.ps1 -Release 25H2
 
-  Downloads and converts the latest 25H2 Pro/en-us ISO. Prints the
-  resulting .iso path to stdout when done (~30-60 min).
+  Fast build: latest 25H2 Pro/en-us ISO without integrated updates
+  (~15-20 min). Prints the resulting .iso path to stdout.
+
+.EXAMPLE
+  PS> .\Get-UUPDumpISO.ps1 -Release 25H2 -IncludeUpdates
+
+  Full build with all cumulative updates and patches baked in (~60-90 min).
+  Use this if you want the ISO for purposes beyond VM-Pilot's HWID flow.
 
 .LINK
   https://uupdump.net
@@ -43,7 +55,8 @@ param(
 
     [string]$Language = 'en-us',
     [string]$Edition  = 'Professional',
-    [string]$WorkDir  = 'C:\Tools\WinVHDX\UUPDump'
+    [string]$WorkDir  = 'C:\Tools\WinVHDX\UUPDump',
+    [switch]$IncludeUpdates
 )
 
 $ErrorActionPreference = 'Stop'
@@ -172,14 +185,21 @@ Remove-Item $packZip -Force -ErrorAction SilentlyContinue
 
 # --- Patch ConvertConfig.ini for non-interactive operation --------------
 # AutoExit=1   → script exits without "press any key"
-# ResetBase=1  → trims older component versions to shrink the ISO
 # SkipWinRE=1  → faster build, smaller ISO; we don't need recovery env
+# AddUpdates / ResetBase default to 0 (fast build, ~15-20 min instead of
+# 60-90 min). VM-Pilot only needs the base OS to collect a hardware hash;
+# the resulting VM is thrown away in minutes, so integrating cumulative
+# updates + trimming the component baseline is wasted work for our use
+# case. Pass -IncludeUpdates to opt into the full pipeline.
+$addUpdates = if ($IncludeUpdates) { '1' } else { '0' }
+$resetBase  = if ($IncludeUpdates) { '1' } else { '0' }
 $iniPath = Join-Path $packDir 'ConvertConfig.ini'
 if (Test-Path $iniPath) {
-    Write-Host '[UUP] Patching ConvertConfig.ini for non-interactive run...'
+    Write-Host "[UUP] Patching ConvertConfig.ini (AddUpdates=$addUpdates ResetBase=$resetBase SkipWinRE=1 AutoExit=1)..."
     (Get-Content $iniPath) `
         -replace '^(AutoExit\s*)=.*','$1=1' `
-        -replace '^(ResetBase\s*)=.*','$1=1' `
+        -replace "^(AddUpdates\s*)=.*","`$1=$addUpdates" `
+        -replace "^(ResetBase\s*)=.*","`$1=$resetBase" `
         -replace '^(SkipWinRE\s*)=.*','$1=1' |
     Set-Content $iniPath
 } else {

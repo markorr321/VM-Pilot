@@ -52,8 +52,11 @@
   endpoint is blocked" failure mode hit on locked-down Enterprise networks.
 - New bundled Get-UUPDumpISO.ps1 helper. Queries the UUP Dump API,
   downloads the conversion script pack, patches ConvertConfig.ini with
-  AutoExit=1 / ResetBase=1 / SkipWinRE=1 for non-interactive operation,
-  and runs the conversion. ~30-60 min wall time per ISO, no user input.
+  AutoExit=1 / AddUpdates=0 / ResetBase=0 / SkipWinRE=1 for a fast
+  non-interactive build (~15-20 min). Pass -IncludeUpdates if you want
+  the full ~60-90 min build with all cumulative updates integrated.
+  VM-Pilot's HWID flow doesn't need integrated updates — the hardware
+  hash is derived from BIOS/vTPM, not OS state.
 - Builder Get-Win11VHDX.ps1 now accepts -IsoPath. If supplied, skips the
   Fido + download flow entirely and DISM-applies the supplied ISO.
 - WIN RELEASE picker is back. Per-release VHDX cache
