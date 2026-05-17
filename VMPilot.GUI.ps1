@@ -853,14 +853,38 @@ function Start-Workflow {
                 }
 
                 Set-Status 'Building Windows VHDX template (one-time, may take 5–30 min)…'
+                # Helper: switch the ActivityBar between indeterminate (default,
+                # for phases without measurable progress) and determinate with a
+                # real 0-100% value (used during the ISO download).
+                function Set-Progress {
+                    param([int]$Percent = -1)
+                    $Window.Dispatcher.Invoke([Action]{
+                        if ($Percent -lt 0) {
+                            $ActivityBar.IsIndeterminate = $true
+                        } else {
+                            $ActivityBar.IsIndeterminate = $false
+                            $ActivityBar.Maximum         = 100
+                            $ActivityBar.Value           = $Percent
+                        }
+                    })
+                }
                 try {
                     & $BuilderScript -Release $Release -Edition Pro -OutVhdx $BootSource -WorkDir $fidoCacheDir 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
                         elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }
-                        elseif ($line -match 'Downloading ISO')             { Set-Status 'Downloading Windows ISO (~5 GB, slow)…' }
+                        elseif ($line -match 'Downloading ISO')             { Set-Status 'Downloading Windows ISO (~5 GB, slow)…'; Set-Progress 0 }
+                        elseif ($line -match '^ISO progress: (\d+)% \((\d+) / (\d+) MB\)') {
+                            $pct = [int]$Matches[1]
+                            Set-Status "Downloading Windows ISO… $pct%  ($($Matches[2]) / $($Matches[3]) MB)"
+                            Set-Progress $pct
+                        }
+                        elseif ($line -match '^ISO progress: 100%') {
+                            Set-Status 'Windows ISO downloaded.'
+                            Set-Progress 100
+                        }
                         elseif ($line -match 'Reusing existing ISO')        { Set-Status 'ISO cached — preparing…' }
-                        elseif ($line -match 'Mounting ISO')                { Set-Status 'Mounting ISO…' }
+                        elseif ($line -match 'Mounting ISO')                { Set-Status 'Mounting ISO…'; Set-Progress -1 }
                         elseif ($line -match 'Using image index')           { Set-Status 'Reading install image…' }
                         elseif ($line -match 'Creating .*GB, dynamic')      { Set-Status 'Creating empty VHDX…' }
                         elseif ($line -match 'Applying image')              { Set-Status 'Applying Windows image (slow)…' }

@@ -49,7 +49,44 @@ if (-not (Test-Path $iso)) {
         throw "Fido failed to resolve ISO URL:`n$errText"
     }
     Write-Host "Downloading ISO -> $iso"
-    Invoke-WebRequest -Uri $url -OutFile $iso
+    # Use BITS so we can emit real % progress that the GUI parses and shows
+    # on its progress bar. Falls back to Invoke-WebRequest if BITS is broken
+    # or unavailable (rare — BITS is a default Windows service).
+    $useBits = $true
+    try { Import-Module BitsTransfer -ErrorAction Stop } catch { $useBits = $false }
+
+    if ($useBits) {
+        $bitsJob = Start-BitsTransfer -Source $url -Destination $iso -DisplayName 'VMPilot-Win11ISO' -Asynchronous
+        try {
+            while ($bitsJob.JobState -in 'Transferring','Connecting','Queued') {
+                $b = $bitsJob.BytesTransferred
+                $t = $bitsJob.BytesTotal
+                if ($t -gt 0) {
+                    $pct = [int](($b / $t) * 100)
+                    $cur = [int]($b / 1MB)
+                    $tot = [int]($t / 1MB)
+                    Write-Host "ISO progress: $pct% ($cur / $tot MB)"
+                }
+                Start-Sleep -Seconds 2
+            }
+            if ($bitsJob.JobState -eq 'Transferred') {
+                Complete-BitsTransfer -BitsJob $bitsJob
+                Write-Host "ISO progress: 100%"
+            } else {
+                $errDesc = $bitsJob.ErrorDescription
+                Remove-BitsTransfer -BitsJob $bitsJob -ErrorAction SilentlyContinue
+                throw "BITS transfer ended in state '$($bitsJob.JobState)': $errDesc"
+            }
+        } catch {
+            if ($bitsJob) {
+                Get-BitsTransfer -JobId $bitsJob.JobId -ErrorAction SilentlyContinue |
+                    Remove-BitsTransfer -ErrorAction SilentlyContinue
+            }
+            throw
+        }
+    } else {
+        Invoke-WebRequest -Uri $url -OutFile $iso
+    }
 } else {
     Write-Host "Reusing existing ISO: $iso"
 }
