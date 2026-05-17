@@ -1231,6 +1231,14 @@ function Start-Workflow {
 
             $mountFolder = Join-Path $env:TEMP "VMPilot-Inject-$(Get-Random)"
             New-Item -Path $mountFolder -ItemType Directory -Force | Out-Null
+            # Disable Windows's global automount before Mount-VHD. The child
+            # VHDX inherits the parent's multi-partition layout, and even
+            # with -NoDriveLetter, Windows's automount service auto-assigns
+            # letters to partitions it can read — including MSR partitions
+            # with no filesystem, which trigger the "format disk in drive X:"
+            # popup. mountvol /N suppresses automount globally; we restore
+            # with /E in the finally block.
+            & mountvol /N | Out-Null
             Mount-VHD -Path $childVhd -NoDriveLetter -ErrorAction Stop
             $partition = $null
             try {
@@ -1288,6 +1296,7 @@ shutdown /s /f /t 5
                 if ($partition) { Remove-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction SilentlyContinue }
                 Dismount-VHD -Path $childVhd -ErrorAction SilentlyContinue
                 Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
+                & mountvol /E | Out-Null  # restore Windows automount
             }
 
             # ===== Boot the VM and open vmconnect =====
@@ -1339,6 +1348,8 @@ shutdown /s /f /t 5
 
             $mountFolder = Join-Path $env:TEMP "VMPilot-Extract-$(Get-Random)"
             New-Item -Path $mountFolder -ItemType Directory -Force | Out-Null
+            # Same automount suppression as the inject step — see comment there
+            & mountvol /N | Out-Null
             Mount-VHD -Path $vhdPath -ReadOnly -NoDriveLetter -ErrorAction Stop
             $partition = $null
             $collected = $false
@@ -1370,6 +1381,7 @@ shutdown /s /f /t 5
                 if ($partition) { Remove-PartitionAccessPath -InputObject $partition -AccessPath $mountFolder -ErrorAction SilentlyContinue }
                 Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue
                 Remove-Item $mountFolder -Force -Recurse -ErrorAction SilentlyContinue
+                & mountvol /E | Out-Null  # restore Windows automount
             }
 
             Start-VM -Name $VMName -ErrorAction SilentlyContinue

@@ -139,6 +139,10 @@ if (Test-Path $OutVhdx) { Remove-Item $OutVhdx -Force }
 
 Write-Host "Creating $OutVhdx ($SizeGB GB, dynamic)..."
 $vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
+# Disable Windows automount before Mount-VHD. Even on a fresh GPT disk,
+# Windows's shell can pop "format disk in drive X:" while we're partitioning
+# if it tries to auto-letter a partition mid-format. Restored at script end.
+& mountvol /N | Out-Null
 $disk = Mount-VHD -Path $OutVhdx -Passthru | Get-Disk
 Initialize-Disk -Number $disk.Number -PartitionStyle GPT
 
@@ -226,6 +230,9 @@ if ((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) {
 }
 
 Dismount-DiskImage -ImagePath $iso | Out-Null
+
+# Restore Windows automount (was disabled before Mount-VHD)
+& mountvol /E | Out-Null
 
 Write-Host "`nDone: $OutVhdx" -ForegroundColor Green
 Write-Host "Attach to a Gen-2 Hyper-V VM with Secure Boot + TPM enabled."
