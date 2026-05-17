@@ -97,9 +97,22 @@ $secondaryXaml
 function Test-HyperVState {
     # Fast path: cmdlet present → feature is live
     if (Get-Command Get-VM -ErrorAction SilentlyContinue) { return 'Ready' }
-    # Slow path: DISM query (a few seconds)
+
+    # Check the OS edition — Pro / Enterprise / Education / Workstations all
+    # support Hyper-V; Home does not. We trust this over DISM feature lookup,
+    # which sometimes returns empty results even for present features.
+    $skuSupportsHyperV = $false
     try {
-        foreach ($name in @('Microsoft-Hyper-V-All','Microsoft-Hyper-V')) {
+        $caption = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).Caption
+        if ($caption -notmatch 'Home' -and
+            $caption -match 'Pro|Enterprise|Education|Workstation|Server') {
+            $skuSupportsHyperV = $true
+        }
+    } catch { }
+
+    # Slow path: DISM query for the feature's actual state
+    try {
+        foreach ($name in @('Microsoft-Hyper-V-All','Microsoft-Hyper-V','Microsoft-Hyper-V-Hypervisor')) {
             $f = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
             if ($f) {
                 switch ($f.State) {
@@ -109,8 +122,13 @@ function Test-HyperVState {
                 }
             }
         }
-        return 'NotAvailable'
-    } catch { return 'NotAvailable' }
+    } catch { }
+
+    # DISM didn't find any of the names we tried. If the SKU supports
+    # Hyper-V we still want to offer the enable flow — better to attempt
+    # it and surface a real DISM error than to refuse outright.
+    if ($skuSupportsHyperV) { return 'Disabled' }
+    return 'NotAvailable'
 }
 
 function Invoke-EnableHyperVWithProgress {

@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.2'
+    ModuleVersion     = '0.1.3'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,6 +42,13 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.1.3
+- Fix false "Hyper-V Not Available" on Windows 11 Enterprise / Pro / Education
+  / Workstation when Get-WindowsOptionalFeature returns empty for the feature
+  names we probe. Now also checks the OS SKU via Win32_OperatingSystem and
+  trusts that any non-Home Pro/Enterprise/Education/Workstation/Server edition
+  can install Hyper-V, even if the DISM feature lookup is inconclusive.
+
 0.1.2
 - Drop the WIN RELEASE picker. Microsoft now publishes only the most-recent
   Windows 11 release on their public download page, and Fido's -Rel parameter
