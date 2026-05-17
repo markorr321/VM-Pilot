@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.0'
+    ModuleVersion     = '0.1.1'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -41,7 +41,20 @@
             Tags         = @('Hyper-V','AutoPilot','Intune','WPF','VM','Enrollment','HWID')
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
-            ReleaseNotes = '0.1.0 - First module-shaped release. Wraps the existing WPF GUI behind Start-VMPilot.'
+            ReleaseNotes = @'
+0.1.1
+- Real % progress bar during the Windows ISO download (BITS-Transfer).
+- Hyper-V auto-enable flow on first run with reboot prompt for fresh installs.
+- LICENSE file (MIT) so the gallery's License link resolves.
+- Builder resolves from the module folder first, then falls back to the
+  legacy C:\Tools\WinVHDX path.
+- Fido cached outside the module folder so Publish-Module does not bundle it.
+- Better error surfacing from Fido (e.g. the 715-123130 IP-block message is
+  now shown verbatim instead of "no URL").
+
+0.1.0
+- First module-shaped release. Wraps the existing WPF GUI behind Start-VMPilot.
+'@
         }
     }
 }
