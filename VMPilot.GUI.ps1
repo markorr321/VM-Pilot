@@ -251,11 +251,10 @@ $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offli
       </StackPanel>
     </Grid>
 
-    <!-- Group Tag (used by Offline mode to bake into the CSV; ignored by Online mode,
-         where the in-VM enrollment GUI captures its own group tag). Leave blank to
-         skip the column entirely. -->
-    <StackPanel Grid.Row="4" Margin="0,0,0,18">
-      <TextBlock Text="GROUP TAG (OPTIONAL, OFFLINE ONLY)" Style="{StaticResource FieldLabel}"/>
+    <!-- Group Tag (Offline only; toggled by Update-ModeUI). Online mode captures its
+         own group tag inside the VM via AutopilotEnroll.GUI.ps1. -->
+    <StackPanel Grid.Row="4" x:Name="GroupTagPanel" Margin="0,0,0,18">
+      <TextBlock Text="GROUP TAG (OPTIONAL)" Style="{StaticResource FieldLabel}"/>
       <TextBox x:Name="GroupTagBox" Text=""/>
     </StackPanel>
 
@@ -320,6 +319,7 @@ $CompletedIcon  = $window.FindName('CompletedIcon')
 $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
 $GroupTagBox    = $window.FindName('GroupTagBox')
+$GroupTagPanel  = $window.FindName('GroupTagPanel')
 
 # --- Dark title bar (DWM immersive dark mode) -----------------------------
 $window.Add_SourceInitialized({
@@ -331,12 +331,19 @@ $window.Add_SourceInitialized({
     } catch { }
 })
 
-# --- Mode toggle: swap button label --------------------------------------
+# --- Mode toggle: swap button label + show/hide Group Tag (Offline only) --
 function Update-ModeUI {
-    if ($ModeOnline.IsChecked) { $RunButton.Content = 'COLLECT & UPLOAD' } else { $RunButton.Content = 'COLLECT HWID' }
+    if ($ModeOnline.IsChecked) {
+        $RunButton.Content       = 'COLLECT & UPLOAD'
+        $GroupTagPanel.Visibility = 'Collapsed'
+    } else {
+        $RunButton.Content       = 'COLLECT HWID'
+        $GroupTagPanel.Visibility = 'Visible'
+    }
 }
 $ModeOffline.Add_Checked({ Update-ModeUI })
 $ModeOnline.Add_Checked({ Update-ModeUI })
+Update-ModeUI   # apply initial state (Offline default → Group Tag visible)
 
 # --- UI helpers -----------------------------------------------------------
 function Set-Status {
@@ -605,11 +612,13 @@ function Start-Workflow {
 
                     # Pre-install NuGet + trust PSGallery so the community script's
                     # Install-Script call doesn't prompt the user. Then launch the GUI.
+                    # NOTE: `|` is literal inside cmd "..." — do NOT escape with ^|, that
+                    # gets passed to PowerShell verbatim and fails to parse.
                     $batContent = @"
 @echo off
 title VM-Pilot AutoPilot Import
 echo Priming PowerShell package management (no interaction needed)...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false ^| Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
 echo Launching AutoPilot Enrollment GUI...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollGuiInVM
 "@
