@@ -6,10 +6,12 @@ AutoPilot from inside the VM via Andrew Taylor's community script (Online).
 
 ## What it does
 
-A single button-click in the host GUI:
+On first launch, VM-Pilot checks Hyper-V is enabled (and offers to enable
+it + reboot if not). Then a single button-click in the host GUI:
 
-1. **Builds** a Windows 11 25H2 parent VHDX (one-time, cached) via
-   `Get-Win11VHDX.ps1` so you don't supply or maintain a template.
+1. **Builds** a Windows 11 parent VHDX (one-time per release, cached) via
+   the bundled `Get-Win11VHDX.ps1` so you don't supply or maintain a template.
+   Pick **24H2** or **25H2** in the GUI's WIN RELEASE segment.
 2. **Creates** a differencing-disk child VM in Hyper-V via the
    `HyperV.VMFactory` PowerShell module — Gen 2, Secure Boot, vTPM, Default Switch.
 3. **Injects** mode-specific payload into the child VHDX *before* first boot.
@@ -53,10 +55,14 @@ What happens next depends on mode:
 
 | File                          | Purpose                                                                       |
 | ----------------------------- | ----------------------------------------------------------------------------- |
-| `VMPilot.bat`                 | Thin launcher. Auto-elevates and starts the host GUI hidden (no console flash). |
+| `VM-Pilot.psd1`               | PowerShell module manifest. Identity, exports, PSGallery metadata. |
+| `VM-Pilot.psm1`               | Module entry. Exposes the `Start-VMPilot` cmdlet. |
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
+| `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
+| `Get-Win11VHDX.ps1`           | Builder. Fetches Fido, downloads the Windows 11 ISO, DISM-applies it to a GPT/UEFI VHDX. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
 | `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
+| `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and cached community script for a clean re-run. |
 | `README.md`                   | This file.                                                                    |
 
 ## Prerequisites
@@ -102,35 +108,61 @@ them is a EULA violation. They are gitignored for that reason.
 
 ## Install + launch
 
+### From PSGallery (recommended)
+
+```powershell
+Install-Module VM-Pilot -Scope CurrentUser
+Start-VMPilot
+```
+
+`Start-VMPilot` runs a fast Hyper-V pre-req check, then spawns the WPF GUI
+in a hidden, auto-elevated process. If Hyper-V isn't enabled, the GUI
+shows a dark dialog offering to enable it (admin + reboot required) before
+opening the main window.
+
+### From source (for development)
+
 ```powershell
 git clone https://github.com/markorr321/VM-Pilot.git
 cd VM-Pilot
 .\VMPilot.bat
 ```
 
-`VMPilot.bat` triggers a UAC prompt, launches the WPF GUI hidden of any
-console window, then the host workflow takes over.
+`VMPilot.bat` triggers a UAC prompt, launches the GUI hidden of any
+console window, then the host workflow takes over. Equivalent to
+`Start-VMPilot` for users who prefer double-click.
 
 ## Host GUI controls
 
 | Field                                  | Notes                                                                  |
 | -------------------------------------- | ---------------------------------------------------------------------- |
-| **MODE** — Offline / Online (Upload AP) | Selects which payload to inject into the VM.                            |
+| **MODE** — Offline / Online            | Selects which payload to inject into the VM.                            |
+| **WIN RELEASE** — 24H2 / 25H2          | Which Windows 11 build to use. Per-release parent VHDX cache.            |
 | **VM NAME**                            | Hyper-V VM name. Must not collide with an existing VM.                   |
 | **CPU CORES** — 1 / 2 / 4              | Defaults to 2. Bump to 4 for faster boot.                                 |
 | **RAM (GB)** — 4 / 8 / 16              | Defaults to 4. Bump to 8 for faster boot.                                 |
 | **GROUP TAG** *(Offline only)*         | Optional. Adds a `Group Tag` column to the CSV. Leave blank to omit.   |
 | **COLLECT HWID** / **COLLECT & UPLOAD** | Label changes with mode. Kicks off the run.                            |
+| **OPEN AUTOPILOT** *(bottom-left)*     | Launches the Intune AutoPilot Devices page in your default browser.    |
+| **CLEANUP VMs** *(bottom-right, red)*  | Opens a dialog listing every Hyper-V VM with per-row checkboxes plus Remove Selected / Remove All buttons. Each removal stops the VM, deletes it, and wipes its `C:\VMs\<name>` folder. |
+| **EXIT** *(bottom-right, gray)*        | Closes the GUI.                                                         |
 
 Status text and an indeterminate progress bar show what stage you're at.
-Success renders a large centered `Complete` in green; errors render red in
-the same slot.
+On success, the run renders a centered **Complete** in green plus a
+**DEVICE SERIAL** block — the serial is auto-copied to your clipboard
+ready to paste. Errors render in red in the same slot.
 
 ## First-run behavior
 
-- **First run, ever** — VM-Pilot invokes `Get-Win11VHDX.ps1` which downloads
-  Fido, then the Windows 11 ISO, then DISM-applies it to
-  `C:\VMs\Win11-25H2.vhdx`. Expect 10–30 minutes depending on network speed.
+- **Hyper-V not enabled** — `Start-VMPilot` prints a yellow console notice,
+  then the GUI shows a dialog: **Hyper-V Required — Enable it now?** Clicking
+  **ENABLE HYPER-V** runs `Enable-WindowsOptionalFeature` in the background
+  (1–3 minutes with an animated progress bar), then a **Reboot Required**
+  dialog. After reboot, run `Start-VMPilot` again and the check passes silently.
+- **First run for a given release** — VM-Pilot invokes `Get-Win11VHDX.ps1`
+  which downloads Fido, then the Windows 11 ISO, then DISM-applies it to
+  `C:\VMs\Win11-<release>.vhdx`. Expect 10–30 minutes depending on network
+  speed. Each release (24H2, 25H2) builds independently and caches separately.
 - **First Online run** — VM-Pilot also downloads
   `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
 - **Every subsequent run** — parent VHDX is reused, community script is reused.
@@ -150,6 +182,22 @@ Once the VM is booted and at OOBE region screen:
 6. Watch the upload + assignment poll. When the script reboots the VM,
    AutoPilot picks up the assigned profile on the next OOBE boot and
    enrolls the device end-to-end without further interaction.
+
+## Resetting state
+
+For rapid test cycles, the bundled `Reset-VMPilot.ps1` wipes every VM-Pilot
+artifact in one shot:
+
+```powershell
+.\Reset-VMPilot.ps1            # Inventory first, confirms before deleting
+.\Reset-VMPilot.ps1 -Force     # Skip confirmation
+.\Reset-VMPilot.ps1 -ResetISO  # Also nukes the cached Windows ISO (~5 GB)
+```
+
+It self-elevates, removes every VM not on its keep list, deletes their
+`C:\VMs\<name>\` folders, removes the cached parent VHDX, and removes the
+cached community AutoPilot script. Override the keep list with
+`-Keep @('VM1','VM2',...)`.
 
 ## Output locations
 
