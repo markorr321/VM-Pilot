@@ -29,6 +29,8 @@
         'VMPilot.GUI.ps1',
         'VMPilotCollect.ps1',
         'AutopilotEnroll.GUI.ps1',
+        'Get-Win11VHDX.ps1',
+        'Reset-VMPilot.ps1',
         'VMPilot.bat',
         'README.md'
     )
