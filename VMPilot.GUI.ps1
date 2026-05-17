@@ -1071,7 +1071,19 @@ function Start-Workflow {
 
                 Set-Status 'Building Windows VHDX template…'
                 try {
-                    $builderArgs = @('-Release', $Release, '-Edition', 'Pro', '-OutVhdx', $BootSource, '-WorkDir', $fidoCacheDir, '-IsoPath', $resolvedIsoPath)
+                    # HASHTABLE splat — not @() array splat. Array splatting
+                    # passes the items as POSITIONAL args, so '-Release' was
+                    # being assigned to $Release (first positional param)
+                    # which then failed the [ValidateSet('24H2','25H2')] with
+                    # "The argument '-Release' does not belong to the set".
+                    # Hashtable splatting passes them as -Name Value pairs.
+                    $builderArgs = @{
+                        Release = $Release
+                        Edition = 'Pro'
+                        OutVhdx = $BootSource
+                        WorkDir = $fidoCacheDir
+                        IsoPath = $resolvedIsoPath
+                    }
                     & $BuilderScript @builderArgs 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
