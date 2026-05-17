@@ -142,18 +142,29 @@ $vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
 $disk = Mount-VHD -Path $OutVhdx -Passthru | Get-Disk
 Initialize-Disk -Number $disk.Number -PartitionStyle GPT
 
+# Create + format + assign letter in that ORDER. Assigning the letter at
+# partition-create time (via -AssignDriveLetter) makes Windows see an
+# unformatted volume and pop "You need to format the disk in drive X:
+# before you can use it." Formatting first and assigning the letter after
+# avoids the popup entirely.
+
 # EFI system partition (FAT32, 100 MB)
-$efi = New-Partition -DiskNumber $disk.Number -Size 100MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
+$efi = New-Partition -DiskNumber $disk.Number -Size 100MB `
+                     -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
 Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false | Out-Null
-$efiLetter = $efi.DriveLetter
+$efi | Add-PartitionAccessPath -AssignDriveLetter
+$efiLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber).DriveLetter
 
 # MSR (16 MB, no letter)
-New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
+New-Partition -DiskNumber $disk.Number -Size 16MB `
+              -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
 
 # Windows partition (rest, NTFS)
-$win = New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter
+$win = New-Partition -DiskNumber $disk.Number -UseMaximumSize `
+                     -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
 Format-Volume -Partition $win -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
-$winLetter = $win.DriveLetter
+$win | Add-PartitionAccessPath -AssignDriveLetter
+$winLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $win.PartitionNumber).DriveLetter
 
 # --- Apply image + boot files ------------------------------------------
 Write-Host "Applying image (this takes a while)..."
