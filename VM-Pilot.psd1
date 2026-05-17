@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.1'
+    ModuleVersion     = '0.1.2'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,6 +42,15 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.1.2
+- Drop the WIN RELEASE picker. Microsoft now publishes only the most-recent
+  Windows 11 release on their public download page, and Fido's -Rel parameter
+  rejects older tokens like '24H2' as 'Invalid Windows release provided.'
+- Pull '-Rel Latest' from Fido and pass '-Ed Home/Pro/Edu' (the consolidated
+  edition Microsoft now ships). The DISM step still picks Windows 11 Pro
+  from the combined install.wim.
+- Parent VHDX is now cached as C:\VMs\Win11.vhdx (release-agnostic).
+
 0.1.1
 - Real % progress bar during the Windows ISO download (BITS-Transfer).
 - Hyper-V auto-enable flow on first run with reboot prompt for fresh installs.

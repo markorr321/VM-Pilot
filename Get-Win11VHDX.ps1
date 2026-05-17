@@ -1,3 +1,4 @@
+
 <#
 .SYNOPSIS
   Downloads a Windows 11 ISO (24H2 or 25H2, current channel) and builds a Gen-2/UEFI VHDX.
@@ -36,10 +37,17 @@ if (-not (Test-Path $fido)) {
 # --- Download ISO -------------------------------------------------------
 $iso = Join-Path $WorkDir "Win11-$Release-$Edition.iso"
 if (-not (Test-Path $iso)) {
-    Write-Host "Resolving ISO URL for Windows 11 $Release $Edition ($Language)..."
+    # Microsoft's public download page now offers only the most-recent
+    # Windows 11 release as a single combined Home/Pro/Edu ISO. Older
+    # tokens like '24H2' and short editions like 'Pro' no longer match
+    # anything in Fido's list. Always ask Fido for Latest + Home/Pro/Edu;
+    # the DISM step below still picks the right edition from install.wim.
+    $fidoRelease = 'Latest'
+    $fidoEdition = 'Home/Pro/Edu'
+    Write-Host "Resolving ISO URL for Windows 11 $fidoRelease $fidoEdition ($Language)..."
     # Merge all streams (*>&1) so Fido's Write-Host error messages (e.g. the
     # 715-123130 IP-block notice) are captured alongside the URL on stdout.
-    $fidoOutput = & $fido -Win 11 -Rel $Release -Ed $Edition -Lang $Language -Arch x64 -GetUrl *>&1 |
+    $fidoOutput = & $fido -Win 11 -Rel $fidoRelease -Ed $fidoEdition -Lang $Language -Arch x64 -GetUrl *>&1 |
                   ForEach-Object { "$_" }
     $url = $fidoOutput | Where-Object { $_ -match '^https?://' } | Select-Object -First 1
     if (-not $url) {

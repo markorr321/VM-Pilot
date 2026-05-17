@@ -387,40 +387,19 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
       <TextBlock Text="Spin up a fresh Hyper-V VM and collect the AutoPilot hardware hash." Foreground="#909090" FontSize="13" Margin="0,6,0,0"/>
     </StackPanel>
 
-    <!-- Mode (left) + Win Release (right) -->
-    <Grid Grid.Row="1" Margin="0,0,0,18">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="20"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-
-      <StackPanel Grid.Column="0">
-        <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="6"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline" IsChecked="True" Style="{StaticResource Segment}"/>
-          <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online"  Style="{StaticResource Segment}"/>
-        </Grid>
-      </StackPanel>
-
-      <StackPanel Grid.Column="2">
-        <TextBlock Text="WIN RELEASE" Style="{StaticResource FieldLabel}"/>
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="6"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <RadioButton Grid.Column="0" x:Name="Rel24H2" GroupName="Release" Content="24H2" IsChecked="True" Style="{StaticResource Segment}"/>
-          <RadioButton Grid.Column="2" x:Name="Rel25H2" GroupName="Release" Content="25H2" Style="{StaticResource Segment}"/>
-        </Grid>
-      </StackPanel>
-    </Grid>
+    <!-- Mode -->
+    <StackPanel Grid.Row="1" Margin="0,0,0,18">
+      <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="6"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline" IsChecked="True" Style="{StaticResource Segment}"/>
+        <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online"  Style="{StaticResource Segment}"/>
+      </Grid>
+    </StackPanel>
 
     <!-- VM name -->
     <StackPanel Grid.Row="2" Margin="0,0,0,18">
@@ -619,8 +598,6 @@ $ResultText     = $window.FindName('ResultText')
 $CompletedIcon  = $window.FindName('CompletedIcon')
 $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
-$Rel24H2        = $window.FindName('Rel24H2')
-$Rel25H2        = $window.FindName('Rel25H2')
 $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
 $SerialPanel    = $window.FindName('SerialPanel')
@@ -713,8 +690,12 @@ function Start-Workflow {
     $ramGB    = Get-CheckedRadio -Values 4,8,16  -Prefix 'Ram' -Default 4
     $online   = [bool]$ModeOnline.IsChecked
     $groupTag = $GroupTagBox.Text.Trim()
-    $release  = if ($Rel25H2.IsChecked) { '25H2' } else { '24H2' }
-    $bootSource    = "C:\VMs\Win11-$release.vhdx"
+    # Fido currently only offers the most-recent Windows 11 release. The
+    # builder's -Release parameter still has a ValidateSet for backward
+    # compat, so we pass a valid token here; internally the builder maps
+    # everything to '-Rel Latest' for the actual Fido call.
+    $release    = '25H2'
+    $bootSource = 'C:\VMs\Win11.vhdx'
 
     if ([string]::IsNullOrWhiteSpace($vmName)) {
         Set-Result -Text 'VM name cannot be empty.' -Color '#F03A47'
