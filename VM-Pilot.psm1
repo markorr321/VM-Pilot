@@ -53,12 +53,18 @@ function Start-VMPilot {
     }
 
     $psExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
-    Start-Process -FilePath $psExe -ArgumentList @(
-        '-NoProfile',
-        '-ExecutionPolicy','Bypass',
-        '-WindowStyle','Hidden',
-        '-File',"`"$guiPath`""
-    ) | Out-Null
+
+    # Use WScript.Shell.Run rather than Start-Process so the console host
+    # never paints. Start-Process -WindowStyle Hidden hides the window AFTER
+    # it appears, producing a brief flash; .Run(..., 0, ...) tells the shell
+    # to create the window in SW_HIDE from the start, so nothing flashes.
+    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $guiPath
+    $wshell  = New-Object -ComObject WScript.Shell
+    try {
+        [void]$wshell.Run(('"{0}" {1}' -f $psExe, $argLine), 0, $false)
+    } finally {
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($wshell)
+    }
 }
 
 Export-ModuleMember -Function Start-VMPilot

@@ -43,6 +43,11 @@
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
 0.1.4
+- No console flash on Start-VMPilot or UAC elevation. Switched from
+  Start-Process -WindowStyle Hidden (which hides the console after it
+  paints, causing a brief flash) to WScript.Shell.Run / Shell.Application
+  ShellExecute with show=0 (SW_HIDE from creation). Only the UAC prompt
+  itself is visible now.
 - Fix "Enable Failed: Class not registered" on IT-managed Enterprise
   machines by calling dism.exe directly instead of the PowerShell
   Enable-WindowsOptionalFeature cmdlet. The PS cmdlet uses DISM COM

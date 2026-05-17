@@ -4,9 +4,20 @@
 # Auto-elevates; hides host console; runs the workflow in a background runspace.
 
 # --- Auto-elevate ---------------------------------------------------------
+# Spawn the elevated child via Shell.Application.ShellExecute with show=0
+# (SW_HIDE). Start-Process -WindowStyle Hidden hides the console AFTER it
+# paints — produces a console flash before UAC, then another after acceptance.
+# ShellExecute(verb='runas', show=0) creates the window in SW_HIDE from the
+# start, so only the UAC prompt itself is visible.
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $psExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
-    Start-Process $psExe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',"`"$PSCommandPath`"") -Verb RunAs
+    $psExe   = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+    $shell   = New-Object -ComObject Shell.Application
+    try {
+        $shell.ShellExecute($psExe, $argLine, '', 'runas', 0)
+    } finally {
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+    }
     [Environment]::Exit(0)
 }
 
