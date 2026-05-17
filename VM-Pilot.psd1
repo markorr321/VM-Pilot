@@ -62,6 +62,15 @@
 - WIN RELEASE picker is back. Per-release VHDX cache
   (C:\VMs\Win11-24H2.vhdx, C:\VMs\Win11-25H2.vhdx) since UUP Dump
   reliably serves both 24H2 and 25H2 (where Fido only offered Latest).
+- Real % progress meter during UUP file download (aria2c) and
+  install.wim compression (LZX) — no more guessing at 99%.
+- In-VM enrollment GUI rebranded as "VM-Pilot" with "AutoPilot Import"
+  subtitle, matching the host GUI.
+- Hardening: verify DISM apply produced a complete Windows install,
+  verify bcdboot wrote real UEFI boot files, suppress Windows automount
+  around every Mount-VHD (kills the "format disk in drive X:" popup),
+  robust VHDX dismount with retry, kill orphan wimserv/wimlib-imagex
+  handles before VM creation, force Drive-first boot order on new VMs.
 
 0.1.4
 - No console flash on Start-VMPilot or UAC elevation. Switched from

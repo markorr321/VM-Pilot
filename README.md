@@ -59,10 +59,12 @@ What happens next depends on mode:
 | `VM-Pilot.psm1`               | Module entry. Exposes the `Start-VMPilot` cmdlet. |
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
-| `Get-Win11VHDX.ps1`           | Builder. Fetches Fido, downloads the Windows 11 ISO, DISM-applies it to a GPT/UEFI VHDX. |
+| `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` to skip download, or falls back to Fido. |
+| `Get-UUPDumpISO.ps1`          | UUP Dump helper. Queries `api.uupdump.net`, downloads + runs the conversion pack, produces a fresh Win11 ISO from the Windows Update CDN. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
 | `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
 | `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and cached community script for a clean re-run. |
+| `LICENSE`                     | MIT.                                                                          |
 | `README.md`                   | This file.                                                                    |
 
 ## Prerequisites
@@ -72,16 +74,22 @@ What happens next depends on mode:
 - **PowerShell 7+** preferred (`pwsh.exe`); falls back to Windows PowerShell 5.1.
 - **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
   first run (`Install-Module -Scope CurrentUser`).
-- **Parent VHDX** — built automatically on first run by the bundled
-  `Get-Win11VHDX.ps1` (ships with the module). It fetches Fido + the Windows
-  11 ISO from Microsoft and DISM-applies it to a fresh GPT/UEFI VHDX at
-  `C:\VMs\Win11-<release>.vhdx`, where `<release>` is whichever build you
-  pick in the **WIN RELEASE** segment (24H2 by default; 25H2 also supported).
-  The build takes ~10–30 min depending on network and runs once per release;
-  every subsequent run reuses the cached VHDX.
-- **Internet** — once per release at host build time for the ISO/community
-  script downloads, and from inside the VM during Online enrollment so it
-  can reach Microsoft Graph.
+- **Parent VHDX** — built automatically on first use of a release. When no
+  cached VHDX exists for the picked release, the GUI shows a setup dialog:
+  - **Download via UUP Dump (recommended)** — pulls UUP files from the
+    Windows Update CDN (`*.delivery.mp.microsoft.com`), assembles a Win11
+    ISO via UUP Dump's converter, DISM-applies to
+    `C:\VMs\Win11-<release>.vhdx`. ~15-20 min on most hardware. Works on
+    corporate networks where the public Software Download endpoint is
+    blocked, because Windows Update has to work for the machine.
+  - **Browse for an existing ISO** — point at a Win11 ISO you already
+    have (Visual Studio Subscriptions, VLSC, MSDN, USB stick). Skips the
+    UUP Dump conversion entirely (~5-10 min total).
+  Per-release cache: 24H2 and 25H2 each have their own VHDX, built only
+  when their respective release is picked.
+- **Internet** — once per release at first build for UUP files or ISO
+  download, and from inside the VM during Online enrollment so it can
+  reach Microsoft Graph.
 - **Intune admin account** (Online mode only) with consent for
   `Device.ReadWrite.All`, `DeviceManagementManagedDevices.ReadWrite.All`,
   `DeviceManagementServiceConfig.ReadWrite.All`, and
@@ -90,11 +98,11 @@ What happens next depends on mode:
 ## Licensing & redistribution
 
 VM-Pilot is MIT-licensed code that **does not include or redistribute any
-Microsoft software**. On first run, the bundled `Get-Win11VHDX.ps1` builder
-uses [Fido](https://github.com/pbatard/Fido) to query the public Microsoft
-Software Download page and pull the Windows 11 ISO directly from Microsoft's
-own servers to your machine. Microsoft sees you as the downloader, not
-VM-Pilot or this repo.
+Microsoft software**. On first run, the bundled helper (`Get-UUPDumpISO.ps1`
+via [UUP Dump](https://uupdump.net), or `Get-Win11VHDX.ps1` with Fido as a
+fallback) downloads Windows install media directly from Microsoft's own
+servers (Windows Update CDN or the public Software Download page) to your
+machine. Microsoft sees you as the downloader, not VM-Pilot or this repo.
 
 You are responsible for ensuring your Windows licensing covers the VMs you
 create. For short-lived test/eval VMs that exist only long enough to grab a
@@ -156,17 +164,21 @@ ready to paste. Errors render in red in the same slot.
 
 - **Hyper-V not enabled** — `Start-VMPilot` prints a yellow console notice,
   then the GUI shows a dialog: **Hyper-V Required — Enable it now?** Clicking
-  **ENABLE HYPER-V** runs `Enable-WindowsOptionalFeature` in the background
-  (1–3 minutes with an animated progress bar), then a **Reboot Required**
-  dialog. After reboot, run `Start-VMPilot` again and the check passes silently.
-- **First run for a given release** — VM-Pilot invokes `Get-Win11VHDX.ps1`
-  which downloads Fido, then the Windows 11 ISO, then DISM-applies it to
-  `C:\VMs\Win11-<release>.vhdx`. Expect 10–30 minutes depending on network
-  speed. Each release (24H2, 25H2) builds independently and caches separately.
+  **ENABLE HYPER-V** runs `dism.exe` in the background (1–3 minutes with an
+  animated progress bar), then a **Reboot Required** dialog. After reboot,
+  run `Start-VMPilot` again and the check passes silently.
+- **First click of COLLECT HWID for a given release** — if no cached parent
+  VHDX exists at `C:\VMs\Win11-<release>.vhdx`, the **Build Windows VHDX**
+  dialog appears with two options:
+  - **Download via UUP Dump (recommended)** — ~15-20 min, status text
+    updates throughout (Downloading UUP files… 54%, Building install.wim…
+    62%, etc.)
+  - **Browse for an existing ISO** — ~5-10 min, skips UUP Dump entirely
+  Each release (24H2, 25H2) builds independently and caches separately.
 - **First Online run** — VM-Pilot also downloads
   `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
 - **Every subsequent run** — parent VHDX is reused, community script is reused.
-  VM creation + boot is the only time spent.
+  VM creation + boot is the only time spent (~5-10 min total per VM).
 
 ## In-VM enrollment GUI (Online only)
 
@@ -174,8 +186,9 @@ Once the VM is booted and at OOBE region screen:
 
 1. Press **`Shift+F10`** to open a command prompt.
 2. Run **`C:\import.bat`**.
-3. A small **AutoPilot Enrollment** window appears with the device serial,
-   a Group Tag field, and an Assigned User UPN field (both optional).
+3. A small **VM-Pilot** window (subtitle: *AutoPilot Import*) appears with
+   the device serial, a Group Tag field, and an Assigned User UPN field
+   (both optional).
 4. Click **ENROLL DEVICE**. A PowerShell window opens showing the community
    script's live progress.
 5. A Microsoft sign-in browser will open — sign in with your Intune admin.
@@ -232,7 +245,9 @@ cached community AutoPilot script. Override the keep list with
   https://github.com/andrew-s-taylor/WindowsAutopilotInfo
 - **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
   https://github.com/SasStu/HyperV.VMFactory
-- **ISO download resolver** — Pete Batard's Fido:
+- **Windows ISO via Windows Update CDN** — UUP Dump:
+  https://uupdump.net
+- **ISO download resolver (fallback)** — Pete Batard's Fido:
   https://github.com/pbatard/Fido
 - **Original CLI workflow that this replaced** —
   https://github.com/markorr321/HyperPilot-Offline-HWID-Collection-Workflow
