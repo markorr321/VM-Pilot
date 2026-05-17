@@ -66,13 +66,16 @@ What happens next depends on mode:
 - **PowerShell 7+** preferred (`pwsh.exe`); falls back to Windows PowerShell 5.1.
 - **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
   first run (`Install-Module -Scope CurrentUser`).
-- **`Get-Win11VHDX.ps1`** at `C:\Tools\WinVHDX\Get-Win11VHDX.ps1`. The VM-Pilot
-  GUI calls this script the first time it needs the parent VHDX to download
-  Fido + the Windows 11 ISO and DISM-apply it to a fresh GPT/UEFI VHDX at
-  `C:\VMs\Win11-25H2.vhdx`. After the one-time build (~10–30 min depending on
-  network) the VHDX is reused forever.
-- **Internet** — once at host build time for the ISO/community script downloads,
-  and from inside the VM during Online enrollment so it can reach Microsoft Graph.
+- **Parent VHDX** — built automatically on first run by the bundled
+  `Get-Win11VHDX.ps1` (ships with the module). It fetches Fido + the Windows
+  11 ISO from Microsoft and DISM-applies it to a fresh GPT/UEFI VHDX at
+  `C:\VMs\Win11-<release>.vhdx`, where `<release>` is whichever build you
+  pick in the **WIN RELEASE** segment (24H2 by default; 25H2 also supported).
+  The build takes ~10–30 min depending on network and runs once per release;
+  every subsequent run reuses the cached VHDX.
+- **Internet** — once per release at host build time for the ISO/community
+  script downloads, and from inside the VM during Online enrollment so it
+  can reach Microsoft Graph.
 - **Intune admin account** (Online mode only) with consent for
   `Device.ReadWrite.All`, `DeviceManagementManagedDevices.ReadWrite.All`,
   `DeviceManagementServiceConfig.ReadWrite.All`, and
