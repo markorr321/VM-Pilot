@@ -1006,19 +1006,37 @@ function Start-Workflow {
                         # for the entire 15-20 min build.
                         $uupOutput = & $uupHelper -Release $Release *>&1 | ForEach-Object {
                             $line = "$_"
-                            if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…' }
+                            # Phase markers (status + reset bar to indeterminate)
+                            if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…'; Set-Progress -1 }
                             elseif ($line -match '^\[UUP\] Selected build: (.+)$')             { Set-Status "Selected build: $($Matches[1])" }
                             elseif ($line -match '^\[UUP\] Downloading conversion script pack'){ Set-Status 'Downloading UUP Dump conversion pack…' }
                             elseif ($line -match '^\[UUP\] Patching')                          { Set-Status 'Patching conversion config…' }
-                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 15-20 min)…' }
-                            elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…' }
+                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 15-20 min)…'; Set-Progress -1 }
+                            elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…'; Set-Progress -1 }
                             elseif ($line -match '^Downloading aria2c')                        { Set-Status 'Downloading aria2c…' }
                             elseif ($line -match '^Verifying aria2c')                          { Set-Status 'Verifying aria2c…' }
                             elseif ($line -match '^Downloading the UUP converter')             { Set-Status 'Downloading UUP converter…' }
-                            elseif ($line -match '^=== Creating install.wim')                  { Set-Status 'Building install.wim (LZX compress, slowest single step)…' }
-                            elseif ($line -match '^=== Creating Setup Media Layout')           { Set-Status 'Creating setup media layout…' }
-                            elseif ($line -match '^=== Updating install.wim')                  { Set-Status 'Integrating updates into install.wim…' }
-                            elseif ($line -match '^Building ISO')                              { Set-Status 'Building ISO image…' }
+                            elseif ($line -match '^=== Creating install.wim')                  { Set-Status 'Building install.wim (LZX compress, slowest single step)…'; Set-Progress 0 }
+                            elseif ($line -match '^=== Creating Setup Media Layout')           { Set-Status 'Creating setup media layout…'; Set-Progress -1 }
+                            elseif ($line -match '^=== Updating install.wim')                  { Set-Status 'Integrating updates into install.wim…'; Set-Progress -1 }
+                            elseif ($line -match '^Building ISO')                              { Set-Status 'Building ISO image…'; Set-Progress -1 }
+                            # ----- Real percentage extraction -----
+                            # aria2c single-file progress, e.g.:
+                            #   [#745648 2.5GiB/4.6GiB(54%) CN:16 DL:105MiB ETA:20s]
+                            elseif ($line -match '^\[#[a-f0-9]+\s+([\d.]+)(GiB|MiB)/([\d.]+)(GiB|MiB)\((\d+)%\)') {
+                                $cur = $Matches[1] + ' ' + $Matches[2]
+                                $tot = $Matches[3] + ' ' + $Matches[4]
+                                $pct = [int]$Matches[5]
+                                Set-Status "Downloading UUP files… $pct%  ($cur / $tot)"
+                                Set-Progress $pct
+                            }
+                            # LZX install.wim build, e.g.:
+                            #   Archiving file data: 2902 MiB of 7100 MiB (40%) done
+                            elseif ($line -match '^Archiving file data:\s+(\d+) MiB of (\d+) MiB \((\d+)%\)') {
+                                $pct = [int]$Matches[3]
+                                Set-Status "Building install.wim… $pct%  ($($Matches[1]) / $($Matches[2]) MiB)"
+                                Set-Progress $pct
+                            }
                             $line
                         }
                         $resolvedIsoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
