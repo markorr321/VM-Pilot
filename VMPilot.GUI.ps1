@@ -916,22 +916,33 @@ function Start-Workflow {
   </Grid>
 </Window>
 "@
-                $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
-                $dlg.Owner = $Window
-                $dlg.FindName('BtnUUPDump').Add_Click({ $script:__isoSource = 'UUPDump'; $dlg.Close() })
-                $dlg.FindName('BtnBrowse').Add_Click({
+                # Store the dialog in $script: scope so handlers can close it
+                # without depending on PowerShell closure semantics (which are
+                # unreliable for handlers registered across the Dispatcher
+                # thread boundary from a runspace). GetNewClosure() further
+                # locks in the lexical scope at registration time.
+                $script:__isoDlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+                $script:__isoDlg.Owner = $Window
+                $script:__isoDlg.FindName('BtnUUPDump').Add_Click({
+                    $script:__isoSource = 'UUPDump'
+                    $script:__isoDlg.Close()
+                }.GetNewClosure())
+                $script:__isoDlg.FindName('BtnBrowse').Add_Click({
                     $ofd = New-Object Microsoft.Win32.OpenFileDialog
                     $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
-                    $ofd.Title       = "Pick a Windows 11 $ReleaseLabel ISO"
+                    $ofd.Title       = "Pick a Windows 11 ISO"
                     $ofd.Multiselect = $false
-                    if ($ofd.ShowDialog($dlg)) {
+                    if ($ofd.ShowDialog($script:__isoDlg)) {
                         $script:__isoSource     = 'Browse'
                         $script:__isoBrowsePath = $ofd.FileName
-                        $dlg.Close()
+                        $script:__isoDlg.Close()
                     }
-                })
-                $dlg.FindName('BtnCancel').Add_Click({ $script:__isoSource = 'Cancel'; $dlg.Close() })
-                [void]$dlg.ShowDialog()
+                }.GetNewClosure())
+                $script:__isoDlg.FindName('BtnCancel').Add_Click({
+                    $script:__isoSource = 'Cancel'
+                    $script:__isoDlg.Close()
+                }.GetNewClosure())
+                [void]$script:__isoDlg.ShowDialog()
             })
             return @{ Source = $script:__isoSource; IsoPath = $script:__isoBrowsePath }
         }
