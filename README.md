@@ -78,6 +78,25 @@ What happens next depends on mode:
   `DeviceManagementServiceConfig.ReadWrite.All`, and
   `DeviceManagementScripts.ReadWrite.All`.
 
+## Licensing & redistribution
+
+VM-Pilot is MIT-licensed code that **does not include or redistribute any
+Microsoft software**. On first run, the bundled `Get-Win11VHDX.ps1` builder
+uses [Fido](https://github.com/pbatard/Fido) to query the public Microsoft
+Software Download page and pull the Windows 11 ISO directly from Microsoft's
+own servers to your machine. Microsoft sees you as the downloader, not
+VM-Pilot or this repo.
+
+You are responsible for ensuring your Windows licensing covers the VMs you
+create. For short-lived test/eval VMs that exist only long enough to grab a
+hardware hash, unactivated Windows is what Microsoft offers for exactly this
+kind of usage. For longer-lived VMs or production deployments, apply a key
+per your normal licensing agreement (retail, OEM, volume, MSDN, etc.).
+
+**Do not** publish or share the cached `Win11-*.vhdx` files this tool
+generates — they contain a Microsoft Windows installation and redistributing
+them is a EULA violation. They are gitignored for that reason.
+
 ## Install + launch
 
 ```powershell

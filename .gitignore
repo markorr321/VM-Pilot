@@ -1,0 +1,12 @@
+# Microsoft install media — never commit. Redistributing Windows binaries
+# violates the Windows EULA, and these files are 5-15 GB each.
+*.vhdx
+*.vhd
+*.iso
+*.wim
+*.esd
+
+# Local test artifacts
+*.log
+*.tmp
+*.bak
