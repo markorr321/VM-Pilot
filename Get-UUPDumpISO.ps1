@@ -167,8 +167,34 @@ if ($Edition -notin $availableEditions) {
 # --- Request the conversion script pack ---------------------------------
 $packDir = Join-Path $WorkDir "Win11-$Release"
 if (Test-Path $packDir) {
+    # Kill any orphan UUP-related processes first so the wipe doesn't fail
+    # silently on locked files (real cause of "Errors were reported during
+    # wim export" in prior runs — leftover install.wim from a previous build
+    # was still locked, the wipe didn't actually clear it, and the new
+    # conversion choked on the stale file).
+    $orphans = Get-Process aria2c, wimlib-imagex, dism, '7zr' -ErrorAction SilentlyContinue
+    if ($orphans) {
+        Write-Host "[UUP] Killing $($orphans.Count) leftover process(es) from a prior run..."
+        $orphans | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+
     Write-Host "[UUP] Cleaning prior pack directory: $packDir"
     Remove-Item $packDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Verify wipe succeeded. If not, wait + retry once. Still failing → bail
+    # loudly so the user knows to manually clean up (better than silently
+    # building on top of stale files and failing later with a cryptic
+    # "wim export error").
+    if (Test-Path $packDir) {
+        Start-Sleep -Seconds 3
+        Remove-Item $packDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $packDir) {
+        throw ("Couldn't clean prior pack directory '$packDir' — files may still be " +
+               "locked. Close any open Explorer windows, kill any aria2c/wimlib/dism " +
+               "processes in Task Manager, then re-run.")
+    }
 }
 New-Item -ItemType Directory -Path $packDir -Force | Out-Null
 
