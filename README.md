@@ -1,203 +1,168 @@
-# 🚀 HyperPilot HWID Collection Workflow
+# VM-Pilot
 
-Automated workflow for collecting AutoPilot Hardware ID (HWID) files from Hyper-V virtual machines. 💻✨
+WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware
+hashes — either as a CSV on disk (Offline) or imported directly into Intune
+AutoPilot from inside the VM via Andrew Taylor's community script (Online).
 
-## 📋 Overview
+## What it does
 
-This PowerShell-based automation tool streamlines the process of collecting AutoPilot HWID CSV files from VMs running in Hyper-V. It handles the entire workflow from copying scripts to the VM, waiting for execution, and retrieving the generated CSV files.
+A single button-click in the host GUI:
 
-## ✨ Features
+1. **Builds** a Windows 11 25H2 parent VHDX (one-time, cached) via
+   `Get-Win11VHDX.ps1` so you don't supply or maintain a template.
+2. **Creates** a differencing-disk child VM in Hyper-V via the
+   `HyperV.VMFactory` PowerShell module — Gen 2, Secure Boot, vTPM, Default Switch.
+3. **Injects** mode-specific payload into the child VHDX *before* first boot.
+4. **Boots** the VM and opens vmconnect.
 
-- 📤 **Automated Script Deployment** - Copies HWID collection batch scripts directly to VMs via Hyper-V Guest Services
-- 🖱️ **Interactive VM Selection** - Displays all available VMs with their current state, CPU usage, and memory allocation
-- 🔐 **Automatic Elevation** - Self-elevates to Administrator privileges when needed
-- 🎮 **Smart VM Management** - Automatically starts, stops, and restarts VMs as required
-- 💾 **VHD Mounting** - Safely mounts VM virtual hard drives in read-only mode to extract files
-- 🔧 **PowerShell Version Detection** - Works with both Windows PowerShell and PowerShell 7
-- 🛡️ **Comprehensive Error Handling** - Includes retry logic and detailed status messages throughout the process
+What happens next depends on mode:
 
-## 📦 Requirements
+### Offline mode (CSV)
 
-- 🪟 Windows OS with Hyper-V enabled
-- 🔑 Administrator privileges (script will auto-elevate)
-- ⚡ PowerShell 5.1 or higher (PowerShell 7 recommended)
-- 🔌 Hyper-V Guest Services enabled on target VMs
-- 📄 AutoPilot HWID Collection batch script (`AutoPilotHWID-Collection.bat`)
+- `VMPilotCollect.ps1` runs as `SetupComplete.cmd` (specialize pass, SYSTEM
+  context, before OOBE).
+- WMI queries `Win32_BIOS` and `MDM_DevDetail_Ext01` for the serial and
+  hardware hash, writes the CSV to `C:\HWID\AutoPilotHWID-<serial>.csv`
+  inside the VM with a **`Group Tag`** column when you fill the host field in.
+- VM self-shuts-down via `shutdown /s /f /t 5`.
+- Host polls for VM `Off`, mounts the child VHDX read-only via a folder
+  access path (avoids Windows auto-opening Explorer), copies the newest
+  matching CSV to `C:\Autopilot HWID Collection\`, dismounts, restarts the VM.
 
-## 📥 Installation
+### Online mode (Intune AutoPilot import)
 
-1. Clone this repository:
-   ```powershell
-   git clone https://github.com/yourusername/HyperPilot-HWID-Workflow.git
-   cd HyperPilot-HWID-Workflow
-   ```
+- VM lands at the **OOBE region screen** and **never leaves OOBE state**.
+- You press **`Shift+F10`** in vmconnect and run **`C:\import.bat`**.
+- The bat pre-installs the NuGet provider + trusts PSGallery silently,
+  then launches a small dark WPF window (`AutopilotEnroll.GUI.ps1`) with
+  optional Group Tag and Assigned User UPN inputs.
+- Click **ENROLL DEVICE** → the community script
+  (`Get-WindowsAutopilotInfoCommunity.ps1`) runs in a visible PowerShell
+  window with `-Online -Assign -Reboot`.
+- A Microsoft sign-in browser opens *inside the VM*. Sign in with an
+  Intune admin account (the script will request the right Graph scopes
+  on first use).
+- Script uploads the hash, polls `state.deviceImportStatus` until
+  `complete`, triggers AutoPilot sync, polls
+  `deploymentProfileAssignmentStatus` until `assigned`, then
+  `Restart-Computer -Force`. Because OOBE was never completed, the reboot
+  returns to OOBE → AutoPilot detects the now-assigned profile and
+  self-enrolls the device.
 
-2. Ensure you have the AutoPilot HWID collection script:
-   ```
-   C:\Autopilot HWID Collection\AutoPilotHWID-Collection.bat
-   ```
+## Repo contents
 
-## 📂 Output Folder Configuration
+| File                          | Purpose                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `VMPilot.bat`                 | Thin launcher. Auto-elevates and starts the host GUI hidden (no console flash). |
+| `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
+| `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
+| `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
+| `README.md`                   | This file.                                                                    |
 
-By default, collected HWID files are saved to:
-```
-C:\Autopilot HWID Collection
-```
+## Prerequisites
 
-You have two options to set this up:
+- **Windows 10/11 host** with the Hyper-V role and Hyper-V Manager installed.
+- **Administrator** rights (the launcher auto-elevates via UAC).
+- **PowerShell 7+** preferred (`pwsh.exe`); falls back to Windows PowerShell 5.1.
+- **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
+  first run (`Install-Module -Scope CurrentUser`).
+- **`Get-Win11VHDX.ps1`** at `C:\Tools\WinVHDX\Get-Win11VHDX.ps1`. The VM-Pilot
+  GUI calls this script the first time it needs the parent VHDX to download
+  Fido + the Windows 11 ISO and DISM-apply it to a fresh GPT/UEFI VHDX at
+  `C:\VMs\Win11-25H2.vhdx`. After the one-time build (~10–30 min depending on
+  network) the VHDX is reused forever.
+- **Internet** — once at host build time for the ISO/community script downloads,
+  and from inside the VM during Online enrollment so it can reach Microsoft Graph.
+- **Intune admin account** (Online mode only) with consent for
+  `Device.ReadWrite.All`, `DeviceManagementManagedDevices.ReadWrite.All`,
+  `DeviceManagementServiceConfig.ReadWrite.All`, and
+  `DeviceManagementScripts.ReadWrite.All`.
 
-### Option 1: Create the Default Folder ✅ (Recommended)
-
-Simply create the folder before running the script:
-```powershell
-New-Item -Path "C:\Autopilot HWID Collection" -ItemType Directory -Force
-```
-
-Or manually create the folder `Autopilot HWID Collection` in your C:\ drive.
-
-### Option 2: Customize the Output Path 🔧
-
-Modify the script to use a different location by editing line 24 in `HyperPilot-HWID-Workflow.ps1`:
-
-```powershell
-# Change this line:
-[string]$DestinationPath = "C:\Autopilot HWID Collection"
-
-# To your preferred path:
-[string]$DestinationPath = "C:\YourCustomFolder"
-```
-
-Or use the `-DestinationPath` parameter when running the script (see Advanced Usage below).
-
-> **Note:** The script will automatically create the destination folder if it doesn't exist, but you may want to pre-create it with appropriate permissions.
-
-## 🎯 Usage
-
-### ⚡ Quick Start (Batch File)
-
-Simply double-click `HyperPilot-HWID-Workflow.bat` to launch the workflow with default settings.
-
-### 💻 PowerShell Direct
-
-```powershell
-.\HyperPilot-HWID-Workflow.ps1
-```
-
-### 🔧 Advanced Usage with Parameters
+## Install + launch
 
 ```powershell
-# Specify a specific VM
-.\HyperPilot-HWID-Workflow.ps1 -VMName "Windows11-VM"
-
-# Customize file search pattern
-.\HyperPilot-HWID-Workflow.ps1 -SearchPattern "HWID*.csv"
-
-# Specify custom source folder on VM
-.\HyperPilot-HWID-Workflow.ps1 -SourceFolder "Documents"
-
-# Custom destination path for collected files
-.\HyperPilot-HWID-Workflow.ps1 -DestinationPath "D:\CollectedHWID"
-
-# Combine multiple parameters
-.\HyperPilot-HWID-Workflow.ps1 -VMName "TestVM" -DestinationPath "C:\Output"
+git clone https://github.com/markorr321/VM-Pilot.git
+cd VM-Pilot
+.\VMPilot.bat
 ```
 
-## 🔄 Workflow Process
+`VMPilot.bat` triggers a UAC prompt, launches the WPF GUI hidden of any
+console window, then the host workflow takes over.
 
-The script performs the following steps automatically:
+## Host GUI controls
 
-### 📤 Phase 1: Copy Scripts TO VM
-1. Lists all available VMs (if no VM name provided)
-2. Displays VM status, CPU usage, and memory
-3. Starts the VM if not already running
-4. Enables Hyper-V Guest Services
-5. Copies the HWID collection script(s) to the VM
+| Field                                  | Notes                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------- |
+| **MODE** — Offline / Online (Upload AP) | Selects which payload to inject into the VM.                            |
+| **VM NAME**                            | Hyper-V VM name. Must not collide with an existing VM.                   |
+| **CPU CORES** — 1 / 2 / 4              | Defaults to 2. Bump to 4 for faster boot.                                 |
+| **RAM (GB)** — 4 / 8 / 16              | Defaults to 4. Bump to 8 for faster boot.                                 |
+| **GROUP TAG** *(Offline only)*         | Optional. Adds a `Group Tag` column to the CSV. Leave blank to omit.   |
+| **COLLECT HWID** / **COLLECT & UPLOAD** | Label changes with mode. Kicks off the run.                            |
 
-### ⏸️ Phase 2: Manual Execution
-- Pauses and prompts you to run the batch file on the VM
-- Wait for the script to complete on the VM
-- Press Enter to continue to Phase 3
+Status text and an indeterminate progress bar show what stage you're at.
+Success renders a large centered `Complete` in green; errors render red in
+the same slot.
 
-### 📥 Phase 3: Collect Files FROM VM
-1. Stops the VM safely
-2. Mounts the VM's VHD in read-only mode
-3. Assigns a temporary drive letter
-4. Searches for HWID CSV files
-5. Copies the newest HWID file to the destination
-6. Dismounts the VHD
-7. Restarts the VM
+## First-run behavior
 
-## ⚙️ Parameters
+- **First run, ever** — VM-Pilot invokes `Get-Win11VHDX.ps1` which downloads
+  Fido, then the Windows 11 ISO, then DISM-applies it to
+  `C:\VMs\Win11-25H2.vhdx`. Expect 10–30 minutes depending on network speed.
+- **First Online run** — VM-Pilot also downloads
+  `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
+- **Every subsequent run** — parent VHDX is reused, community script is reused.
+  VM creation + boot is the only time spent.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `VMName` | String | _(Interactive)_ | Name of the target VM. If not provided, displays a selection menu |
-| `FilesToCopy` | String[] | `AutoPilotHWID-Collection.bat` | Array of files to copy to the VM |
-| `SearchPattern` | String | `AutoPilotHWID*` | File search pattern for collecting files from VM |
-| `SourceFolder` | String | `HWID` | Folder on the VM to search for HWID files |
-| `DestinationPath` | String | `C:\Autopilot HWID Collection` | Local destination for collected files |
+## In-VM enrollment GUI (Online only)
 
-## 📊 Output
+Once the VM is booted and at OOBE region screen:
 
-Upon successful completion, the script displays:
-- Number of files copied to the VM
-- Number of files collected from the VM
-- Location of collected HWID files
-- Final VM status
+1. Press **`Shift+F10`** to open a command prompt.
+2. Run **`C:\import.bat`**.
+3. A small **AutoPilot Enrollment** window appears with the device serial,
+   a Group Tag field, and an Assigned User UPN field (both optional).
+4. Click **ENROLL DEVICE**. A PowerShell window opens showing the community
+   script's live progress.
+5. A Microsoft sign-in browser will open — sign in with your Intune admin.
+6. Watch the upload + assignment poll. When the script reboots the VM,
+   AutoPilot picks up the assigned profile on the next OOBE boot and
+   enrolls the device end-to-end without further interaction.
 
-Example:
-```
-================================================================================
-  WORKFLOW COMPLETE
-================================================================================
-VM Name:              Windows11-Dev
-Files Copied TO VM:   1
-Files Collected:      1
-Collection Location:  C:\Autopilot HWID Collection
-VM Status:            Running
-================================================================================
+## Output locations
 
-✓ SUCCESS: Workflow completed successfully!
-Your HWID files are ready at: C:\Autopilot HWID Collection
-```
+| Mode    | Location                                                                  |
+| ------- | ------------------------------------------------------------------------- |
+| Offline | `C:\Autopilot HWID Collection\AutoPilotHWID-<serial>.csv` on the host.   |
+| Online  | Imported directly into your Intune tenant; the CSV exists only inside the VM at `C:\HWID\` and is discarded with the VM. |
 
-## 🛡️ Error Handling
+## Troubleshooting
 
-The script includes comprehensive error handling:
-- **VM Not Found** - Validates VM exists before proceeding
-- **Guest Services** - Automatically enables and verifies Hyper-V Guest Services
-- **VHD Mount Retries** - Attempts VHD mounting up to 3 times with delays
-- **Drive Letter Assignment** - Finds available drive letters and verifies accessibility
-- **Timeout Protection** - Includes timeouts for VM start/stop operations
+- **VM doesn't boot to OOBE / never auto-shuts-down (Offline)** — mount the
+  child VHDX manually and check `C:\HWID\collection.log` for the script's
+  output. Usually a hash-collection error.
+- **In-VM `import.bat` shows a parser error** — the in-VM enrollment GUI is
+  intentionally pure-ASCII to avoid Windows PowerShell 5.1 encoding issues.
+  If you edit `AutopilotEnroll.GUI.ps1`, keep it ASCII-only.
+- **Sign-in succeeds but upload returns 403** — your account doesn't have
+  the `DeviceManagementServiceConfig.ReadWrite.All` scope granted in your
+  tenant. Have an admin grant consent.
+- **Script imports + syncs but doesn't reboot** — you're missing the
+  `-Assign` flag in the community script invocation. The community script
+  needs all three: `-Online -Assign -Reboot`. VM-Pilot ships this combo by
+  default; if you've forked the in-VM GUI, double-check.
+- **Cached VHDX is locked** — a previous test VM is still using it as a
+  differencing parent. Stop+remove that VM and its `C:\VMs\<name>\` folder
+  before you can re-build the parent.
 
-## 🔍 Troubleshooting
+## Credits
 
-### 🔌 Guest Services Issues
-If files fail to copy to the VM:
-1. Ensure Hyper-V Guest Services are enabled on the VM
-2. Verify the VM is fully booted and responsive
-3. Check that the VM has sufficient disk space
-
-### 💾 VHD Mount Failures
-If VHD mounting fails:
-1. Ensure no other processes are accessing the VHD
-2. Wait a few seconds and retry
-3. Manually dismount stuck VHDs: `Dismount-VHD -Path "path\to\disk.vhdx"`
-
-### 📁 No Files Found
-If no HWID files are found:
-1. Verify the AutoPilot script ran successfully on the VM
-2. Check the `SourceFolder` parameter matches where files were saved
-3. Confirm the `SearchPattern` matches your file naming
-
-## 📜 License
-
-This project is provided as-is for AutoPilot HWID collection workflows.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 👨‍💻 Author
-
-Created for streamlining AutoPilot HWID collection in Hyper-V environments.
+- **AutoPilot upload + assignment polling** — Andrew Taylor's community
+  fork of Get-WindowsAutopilotInfo:
+  https://github.com/andrew-s-taylor/WindowsAutopilotInfo
+- **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
+  https://github.com/SasStu/HyperV.VMFactory
+- **ISO download resolver** — Pete Batard's Fido:
+  https://github.com/pbatard/Fido
+- **Original CLI workflow that this replaced** —
+  https://github.com/markorr321/HyperPilot-Offline-HWID-Collection-Workflow
