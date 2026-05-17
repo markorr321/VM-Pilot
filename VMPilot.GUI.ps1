@@ -31,7 +31,16 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 
 # --- Constants ------------------------------------------------------------
 $script:BootSource         = 'C:\VMs\Win11-24H2.vhdx'
-$script:BuilderScript      = 'C:\Tools\WinVHDX\Get-Win11VHDX.ps1'
+# Prefer the builder vendored in the module folder; fall back to the legacy
+# C:\Tools\WinVHDX\ location for users who installed the script there before
+# the module wrapper existed.
+$script:BuilderScript      = $(
+    $localBuilder  = Join-Path $PSScriptRoot 'Get-Win11VHDX.ps1'
+    $legacyBuilder = 'C:\Tools\WinVHDX\Get-Win11VHDX.ps1'
+    if     (Test-Path $localBuilder)  { $localBuilder }
+    elseif (Test-Path $legacyBuilder) { $legacyBuilder }
+    else                              { $localBuilder }
+)
 $script:VMPath             = 'C:\VMs'
 $script:FilesToCopy        = @('C:\Autopilot HWID Collection\AutoPilotHWID-Collection.bat')
 $script:SearchPattern      = 'AutoPilotHWID*'
