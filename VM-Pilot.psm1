@@ -1,4 +1,4 @@
-# VMPilot.psm1 -- module entry. For now this just exposes Start-VMPilot, which
+# VM-Pilot.psm1 -- module entry. For now this just exposes Start-VMPilot, which
 # spawns the existing VMPilot.GUI.ps1 in a new (hidden) PowerShell process so
 # the GUI's auto-elevation and hidden-console behavior continue to work as
 # they do when the user double-clicks VMPilot.bat.
@@ -49,7 +49,7 @@ function Start-VMPilot {
 
     $guiPath = Join-Path $script:ModuleRoot 'VMPilot.GUI.ps1'
     if (-not (Test-Path $guiPath -PathType Leaf)) {
-        throw "VMPilot.GUI.ps1 not found at $guiPath. Reinstall the VMPilot module."
+        throw "VMPilot.GUI.ps1 not found at $guiPath. Reinstall the VM-Pilot module."
     }
 
     $psExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }

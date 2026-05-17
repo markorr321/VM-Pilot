@@ -1,6 +1,6 @@
 @{
     # ----- Identity -----
-    RootModule        = 'VMPilot.psm1'
+    RootModule        = 'VM-Pilot.psm1'
     ModuleVersion     = '0.1.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
@@ -25,7 +25,7 @@
 
     # ----- Files shipped with the module -----
     FileList = @(
-        'VMPilot.psm1',
+        'VM-Pilot.psm1',
         'VMPilot.GUI.ps1',
         'VMPilotCollect.ps1',
         'AutopilotEnroll.GUI.ps1',
