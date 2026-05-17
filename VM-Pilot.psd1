@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.5'
+    ModuleVersion     = '0.1.4'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,36 +42,24 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
-0.1.5
-- Fix "Enable Failed: Class not registered" on IT-managed Enterprise
-  machines. Switching to a child PowerShell process in 0.1.1 wasn't
-  enough — the DISM COM components themselves can be misregistered
-  on locked-down boxes, so even the child process hit HRESULT
-  0x80040154. Now calls dism.exe directly (native binary, no COM
-  dependency) which works regardless of the broken registration.
-
 0.1.4
-- Hyper-V startup check is now sub-second on Pro/Enterprise/Education boxes.
-  Previously we ran up to three Get-WindowsOptionalFeature lookups against
-  DISM (15-45s) before showing the enable dialog. We now trust the OS SKU:
-  any non-Home Pro/Enterprise/Education/Workstation/Server edition is
-  treated as Disabled (offers to enable) without probing DISM. The actual
-  Enable-WindowsOptionalFeature call surfaces any real failure.
-
-0.1.3
-- Fix false "Hyper-V Not Available" on Windows 11 Enterprise / Pro / Education
-  / Workstation when Get-WindowsOptionalFeature returns empty for the feature
-  names we probe. Now also checks the OS SKU via Win32_OperatingSystem and
-  trusts that any non-Home Pro/Enterprise/Education/Workstation/Server edition
-  can install Hyper-V, even if the DISM feature lookup is inconclusive.
-
-0.1.2
-- Drop the WIN RELEASE picker. Microsoft now publishes only the most-recent
-  Windows 11 release on their public download page, and Fido's -Rel parameter
-  rejects older tokens like '24H2' as 'Invalid Windows release provided.'
-- Pull '-Rel Latest' from Fido and pass '-Ed Home/Pro/Edu' (the consolidated
-  edition Microsoft now ships). The DISM step still picks Windows 11 Pro
-  from the combined install.wim.
+- Fix "Enable Failed: Class not registered" on IT-managed Enterprise
+  machines by calling dism.exe directly instead of the PowerShell
+  Enable-WindowsOptionalFeature cmdlet. The PS cmdlet uses DISM COM
+  components that can be misregistered on locked-down boxes (HRESULT
+  0x80040154); dism.exe is a native binary with no COM dependency.
+- Hyper-V startup check is now sub-second on Pro/Enterprise/Education
+  boxes. Previously ran up to three Get-WindowsOptionalFeature lookups
+  against DISM (15-45s) before showing the enable dialog. Trust the OS
+  SKU via Win32_OperatingSystem; any non-Home Pro/Enterprise/Education/
+  Workstation/Server edition is treated as Disabled (offers to enable)
+  without probing DISM.
+- Drop the WIN RELEASE picker. Microsoft now publishes only the most-
+  recent Windows 11 release on their public download page, and Fido's
+  -Rel parameter rejects older tokens like '24H2' as 'Invalid Windows
+  release provided.' Pull '-Rel Latest' from Fido and pass
+  '-Ed Home/Pro/Edu' (the consolidated edition Microsoft now ships).
+  The DISM step still picks Windows 11 Pro from the combined install.wim.
 - Parent VHDX is now cached as C:\VMs\Win11.vhdx (release-agnostic).
 
 0.1.1
