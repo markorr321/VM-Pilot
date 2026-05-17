@@ -34,6 +34,19 @@ function Start-VMPilot {
     [CmdletBinding()]
     param()
 
+    # ===== Pre-req check #1: Hyper-V =====
+    # Fires before the GUI process spawns so the user sees console feedback
+    # immediately on `Start-VMPilot` (before any UAC popup). The GUI itself
+    # repeats this check with a full graphical enable + reboot flow once
+    # elevated, but this preview lets the user know what to expect.
+    if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
+        Write-Host ''
+        Write-Host '[VM-Pilot] Pre-req check: Hyper-V is not enabled on this machine.' -ForegroundColor Yellow
+        Write-Host '[VM-Pilot] Launching the GUI — it will request elevation and offer to' -ForegroundColor Yellow
+        Write-Host '[VM-Pilot] enable Hyper-V (reboot required) before opening the main window.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+
     $guiPath = Join-Path $script:ModuleRoot 'VMPilot.GUI.ps1'
     if (-not (Test-Path $guiPath -PathType Leaf)) {
         throw "VMPilot.GUI.ps1 not found at $guiPath. Reinstall the VMPilot module."

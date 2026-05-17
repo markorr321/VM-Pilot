@@ -29,6 +29,190 @@ try {
 # --- WPF assemblies -------------------------------------------------------
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 
+# --- Hyper-V startup check ------------------------------------------------
+# Module ships via PSGallery; on a fresh install we can't assume Hyper-V is
+# present. Detect early and offer to enable + reboot before any code path
+# tries to call Get-VM.
+
+function Show-VMPilotDialog {
+    param(
+        [Parameter(Mandatory)] [string]$Title,
+        [Parameter(Mandatory)] [string]$Message,
+        [string]$PrimaryText   = 'OK',
+        [string]$SecondaryText,
+        [string]$PrimaryColor  = '#0078D4'
+    )
+    $hasSecondary = -not [string]::IsNullOrWhiteSpace($SecondaryText)
+    $secondaryXaml = if ($hasSecondary) {
+@"
+      <Button Grid.Column="0" x:Name="BtnSecondary" Content="$SecondaryText"
+              Width="140" Height="36" Margin="0,0,8,0"
+              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
+              FontWeight="SemiBold" Cursor="Hand"/>
+"@
+    } else { '' }
+
+    [xml]$x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="$Title" Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Grid.Row="0" Text="$Title" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
+    <TextBlock Grid.Row="1" x:Name="Body" Foreground="#C0C0C0" FontSize="13"
+               TextWrapping="Wrap" Margin="0,0,0,24"/>
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+$secondaryXaml
+      <Button Grid.Column="2" x:Name="BtnPrimary" Content="$PrimaryText"
+              Width="160" Height="36"
+              Background="$PrimaryColor" Foreground="#FFFFFF" BorderThickness="0"
+              FontWeight="SemiBold" Cursor="Hand"/>
+    </Grid>
+  </Grid>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $dlg.FindName('Body').Text = $Message
+    $script:__vmpDlgChoice = 'Closed'
+    $dlg.FindName('BtnPrimary').Add_Click({ $script:__vmpDlgChoice = 'Primary';   $dlg.Close() })
+    if ($hasSecondary) {
+        $dlg.FindName('BtnSecondary').Add_Click({ $script:__vmpDlgChoice = 'Secondary'; $dlg.Close() })
+    }
+    [void]$dlg.ShowDialog()
+    return $script:__vmpDlgChoice
+}
+
+function Test-HyperVState {
+    # Fast path: cmdlet present → feature is live
+    if (Get-Command Get-VM -ErrorAction SilentlyContinue) { return 'Ready' }
+    # Slow path: DISM query (a few seconds)
+    try {
+        foreach ($name in @('Microsoft-Hyper-V-All','Microsoft-Hyper-V')) {
+            $f = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
+            if ($f) {
+                switch ($f.State) {
+                    'EnablePending' { return 'EnablePending' }
+                    'Enabled'       { return 'Ready' }
+                    default         { return 'Disabled' }
+                }
+            }
+        }
+        return 'NotAvailable'
+    } catch { return 'NotAvailable' }
+}
+
+function Invoke-EnableHyperVWithProgress {
+    # Shows a progress dialog while Enable-WindowsOptionalFeature runs on a
+    # background runspace, so the UI stays responsive (the indeterminate
+    # progress bar keeps animating). Returns @{ Success = bool; Error = string }.
+    [xml]$x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Enabling Hyper-V" Width="440" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Grid.Row="0" Text="Enabling Hyper-V" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
+    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"
+               Text="This takes about a minute. Please don't close this window."/>
+    <ProgressBar Grid.Row="2" IsIndeterminate="True" Height="6" Background="#1F1F1F" Foreground="#0078D4" BorderThickness="0"/>
+  </Grid>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.ApartmentState = 'STA'
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        try {
+            Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart -ErrorAction Stop | Out-Null
+            return @{ Success = $true; Error = $null }
+        } catch {
+            return @{ Success = $false; Error = $_.Exception.Message }
+        }
+    })
+    $async = $ps.BeginInvoke()
+
+    $script:__enableResult = $null
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(400)
+    $timer.Add_Tick({
+        if ($async.IsCompleted) {
+            $timer.Stop()
+            try   { $script:__enableResult = ($ps.EndInvoke($async))[0] }
+            catch { $script:__enableResult = @{ Success = $false; Error = $_.Exception.Message } }
+            $ps.Dispose(); $rs.Close(); $rs.Dispose()
+            $dlg.Close()
+        }
+    })
+    $timer.Start()
+
+    [void]$dlg.ShowDialog()
+    return $script:__enableResult
+}
+
+switch (Test-HyperVState) {
+    'Ready' { } # continue to main GUI
+    'NotAvailable' {
+        [void](Show-VMPilotDialog -Title 'Hyper-V Not Available' `
+            -Message ("Hyper-V isn't available on this edition of Windows. " +
+                      "VM-Pilot requires Windows 10/11 Pro, Enterprise, or Education.`r`n`r`n" +
+                      "Windows Home does not include Hyper-V.") `
+            -PrimaryText 'OK')
+        [Environment]::Exit(1)
+    }
+    'EnablePending' {
+        $r = Show-VMPilotDialog -Title 'Reboot Required' `
+            -Message "Hyper-V is enabled but a reboot is required before VM-Pilot can use it. Reboot now?" `
+            -PrimaryText 'REBOOT NOW' -SecondaryText 'REBOOT LATER'
+        if ($r -eq 'Primary') { Restart-Computer -Force }
+        [Environment]::Exit(0)
+    }
+    'Disabled' {
+        $r = Show-VMPilotDialog -Title 'Hyper-V Required' `
+            -Message ("VM-Pilot needs Hyper-V to create virtual machines, but it's not enabled on this machine.`r`n`r`n" +
+                      "Enable it now? A reboot is required after enable.") `
+            -PrimaryText 'ENABLE HYPER-V' -SecondaryText 'CANCEL'
+        if ($r -ne 'Primary') { [Environment]::Exit(0) }
+
+        $result = Invoke-EnableHyperVWithProgress
+        if (-not $result -or -not $result.Success) {
+            $msg = if ($result) { $result.Error } else { 'Unknown error.' }
+            [void](Show-VMPilotDialog -Title 'Enable Failed' `
+                -Message "Failed to enable Hyper-V:`r`n`r`n$msg" -PrimaryText 'OK')
+            [Environment]::Exit(1)
+        }
+
+        $r = Show-VMPilotDialog -Title 'Hyper-V Enabled' `
+            -Message ("Hyper-V has been enabled successfully. A reboot is required to complete the installation.`r`n`r`n" +
+                      "After reboot, run Start-VMPilot again to launch the GUI.`r`n`r`nReboot now?") `
+            -PrimaryText 'REBOOT NOW' -SecondaryText 'REBOOT LATER'
+        if ($r -eq 'Primary') { Restart-Computer -Force }
+        [Environment]::Exit(0)
+    }
+}
+
 # --- Constants ------------------------------------------------------------
 $script:BootSource         = 'C:\VMs\Win11-24H2.vhdx'
 # Prefer the builder vendored in the module folder; fall back to the legacy
