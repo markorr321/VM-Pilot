@@ -139,30 +139,33 @@ function Invoke-EnableHyperVWithProgress {
 "@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
 
-    $rs = [runspacefactory]::CreateRunspace()
-    $rs.ApartmentState = 'STA'
-    $rs.Open()
-    $ps = [powershell]::Create()
-    $ps.Runspace = $rs
-    [void]$ps.AddScript({
-        try {
-            Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart -ErrorAction Stop | Out-Null
-            return @{ Success = $true; Error = $null }
-        } catch {
-            return @{ Success = $false; Error = $_.Exception.Message }
-        }
-    })
-    $async = $ps.BeginInvoke()
+    # Spawn a child powershell.exe to run the enable. Doing this in a runspace
+    # fails with "Class not registered" (HRESULT 0x80040154) because the DISM
+    # COM components don't initialize cleanly under a child runspace's
+    # apartment state. A separate process gets its own COM init and works.
+    $psExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+    $childCmd = "try { Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart -ErrorAction Stop | Out-Null; exit 0 } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $psExe
+    $psi.Arguments              = "-NoProfile -ExecutionPolicy Bypass -Command `"& { $childCmd }`""
+    $psi.UseShellExecute        = $false
+    $psi.RedirectStandardError  = $true
+    $psi.CreateNoWindow         = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
 
     $script:__enableResult = $null
     $timer = New-Object System.Windows.Threading.DispatcherTimer
-    $timer.Interval = [TimeSpan]::FromMilliseconds(400)
+    $timer.Interval = [TimeSpan]::FromMilliseconds(500)
     $timer.Add_Tick({
-        if ($async.IsCompleted) {
+        if ($proc.HasExited) {
             $timer.Stop()
-            try   { $script:__enableResult = ($ps.EndInvoke($async))[0] }
-            catch { $script:__enableResult = @{ Success = $false; Error = $_.Exception.Message } }
-            $ps.Dispose(); $rs.Close(); $rs.Dispose()
+            $stderrText = $proc.StandardError.ReadToEnd().Trim()
+            if ($proc.ExitCode -eq 0) {
+                $script:__enableResult = @{ Success = $true; Error = $null }
+            } else {
+                $errMsg = if ($stderrText) { $stderrText } else { "Enable failed (exit code $($proc.ExitCode))" }
+                $script:__enableResult = @{ Success = $false; Error = $errMsg }
+            }
             $dlg.Close()
         }
     })
