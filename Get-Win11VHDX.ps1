@@ -1,0 +1,113 @@
+<#
+.SYNOPSIS
+  Downloads a Windows 11 ISO (24H2 or 25H2, current channel) and builds a Gen-2/UEFI VHDX.
+
+.EXAMPLE
+  .\Get-Win11VHDX.ps1 -Release 25H2 -Edition Pro -OutVhdx C:\VMs\Win11-25H2.vhdx
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet('24H2','25H2')] [string]$Release  = '25H2',
+    [ValidateSet('Home','Pro')]  [string]$Edition  = 'Pro',
+    [string]$Language = 'English',
+    [int]   $SizeGB   = 64,
+    [string]$WorkDir  = 'C:\Tools\WinVHDX',
+    [string]$OutVhdx  = "C:\VMs\Win11-$Release.vhdx"
+)
+
+$ErrorActionPreference = 'Stop'
+
+# --- Admin check ---------------------------------------------------------
+$me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "Run this from an elevated PowerShell — VHDX mount + DISM require admin."
+}
+
+New-Item -ItemType Directory -Force $WorkDir            | Out-Null
+New-Item -ItemType Directory -Force (Split-Path $OutVhdx) | Out-Null
+
+# --- Fetch Fido (only external dep) -------------------------------------
+$fido = Join-Path $WorkDir 'Fido.ps1'
+if (-not (Test-Path $fido)) {
+    Write-Host "Fetching Fido..."
+    Invoke-WebRequest 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' -OutFile $fido
+}
+
+# --- Download ISO -------------------------------------------------------
+$iso = Join-Path $WorkDir "Win11-$Release-$Edition.iso"
+if (-not (Test-Path $iso)) {
+    Write-Host "Resolving ISO URL for Windows 11 $Release $Edition ($Language)..."
+    # Merge all streams (*>&1) so Fido's Write-Host error messages (e.g. the
+    # 715-123130 IP-block notice) are captured alongside the URL on stdout.
+    $fidoOutput = & $fido -Win 11 -Rel $Release -Ed $Edition -Lang $Language -Arch x64 -GetUrl *>&1 |
+                  ForEach-Object { "$_" }
+    $url = $fidoOutput | Where-Object { $_ -match '^https?://' } | Select-Object -First 1
+    if (-not $url) {
+        $errLines = $fidoOutput | Where-Object { $_ -match 'Error|banned|715-' }
+        $errText  = if ($errLines) { ($errLines -join "`n") } else { ($fidoOutput -join "`n").Trim() }
+        if (-not $errText) { $errText = "(no output from Fido) — try running '.\Fido.ps1 -Win 11' interactively to diagnose." }
+        throw "Fido failed to resolve ISO URL:`n$errText"
+    }
+    Write-Host "Downloading ISO -> $iso"
+    Invoke-WebRequest -Uri $url -OutFile $iso
+} else {
+    Write-Host "Reusing existing ISO: $iso"
+}
+
+# --- Mount ISO and locate install.wim/esd -------------------------------
+Write-Host "Mounting ISO..."
+$isoMount  = Mount-DiskImage -ImagePath $iso -PassThru
+$isoDrive  = ($isoMount | Get-Volume).DriveLetter
+$sources   = "${isoDrive}:\sources"
+$installImg = Get-ChildItem $sources -Filter 'install.*' |
+              Where-Object { $_.Name -in 'install.wim','install.esd' } |
+              Select-Object -First 1
+if (-not $installImg) { throw "No install.wim/install.esd under $sources" }
+
+# Pick edition index
+$editionName = if ($Edition -eq 'Pro') { 'Windows 11 Pro' } else { 'Windows 11 Home' }
+$imgInfo = Get-WindowsImage -ImagePath $installImg.FullName |
+           Where-Object { $_.ImageName -eq $editionName } |
+           Select-Object -First 1
+if (-not $imgInfo) {
+    $available = (Get-WindowsImage -ImagePath $installImg.FullName).ImageName -join ', '
+    throw "Edition '$editionName' not found. Available: $available"
+}
+Write-Host "Using image index $($imgInfo.ImageIndex): $($imgInfo.ImageName)"
+
+# --- Create + partition VHDX -------------------------------------------
+if (Test-Path $OutVhdx) { Remove-Item $OutVhdx -Force }
+
+Write-Host "Creating $OutVhdx ($SizeGB GB, dynamic)..."
+$vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
+$disk = Mount-VHD -Path $OutVhdx -Passthru | Get-Disk
+Initialize-Disk -Number $disk.Number -PartitionStyle GPT
+
+# EFI system partition (FAT32, 100 MB)
+$efi = New-Partition -DiskNumber $disk.Number -Size 100MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
+Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false | Out-Null
+$efiLetter = $efi.DriveLetter
+
+# MSR (16 MB, no letter)
+New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
+
+# Windows partition (rest, NTFS)
+$win = New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter
+Format-Volume -Partition $win -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
+$winLetter = $win.DriveLetter
+
+# --- Apply image + boot files ------------------------------------------
+Write-Host "Applying image (this takes a while)..."
+Expand-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex -ApplyPath "${winLetter}:\"
+
+Write-Host "Writing UEFI boot files..."
+& bcdboot "${winLetter}:\Windows" /s "${efiLetter}:" /f UEFI
+if ($LASTEXITCODE -ne 0) { throw "bcdboot failed with exit $LASTEXITCODE" }
+
+# --- Cleanup ------------------------------------------------------------
+Write-Host "Dismounting..."
+Dismount-VHD -Path $OutVhdx
+Dismount-DiskImage -ImagePath $iso | Out-Null
+
+Write-Host "`nDone: $OutVhdx" -ForegroundColor Green
+Write-Host "Attach to a Gen-2 Hyper-V VM with Secure Boot + TPM enabled."
