@@ -282,11 +282,18 @@ try {
 }
 
 # --- Locate the resulting ISO -------------------------------------------
-$iso = Get-ChildItem $packDir -Filter '*.iso' -File -ErrorAction SilentlyContinue |
+# Recursive search — UUP Dump's converter sometimes places the ISO in an
+# ISOFOLDER subdirectory rather than the pack root. Pick the largest .iso
+# (the final assembled image) and sanity-check its size; anything under
+# 1 GB is a fragment, not a real Windows ISO.
+$iso = Get-ChildItem $packDir -Recurse -Filter '*.iso' -File -ErrorAction SilentlyContinue |
        Sort-Object Length -Descending |
        Select-Object -First 1
 if (-not $iso) {
-    throw "Conversion completed but no .iso file found in $packDir"
+    throw "Conversion completed but no .iso file found anywhere under $packDir"
+}
+if ($iso.Length -lt 1GB) {
+    throw "Found .iso at $($iso.FullName) but it is only $([math]::Round($iso.Length / 1MB, 0)) MB — far smaller than a real Windows 11 ISO (~5 GB). Conversion likely produced an incomplete image."
 }
 
 Write-Host "[UUP] ISO created: $($iso.FullName)"

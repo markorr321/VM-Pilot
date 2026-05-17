@@ -159,13 +159,61 @@ $winLetter = $win.DriveLetter
 Write-Host "Applying image (this takes a while)..."
 Expand-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex -ApplyPath "${winLetter}:\"
 
+# Verify DISM apply actually wrote a complete Windows install.
+# The SYSTEM registry hive is a load-bearing file every Windows boot
+# needs — if it's missing or empty, the apply was interrupted and the
+# VHDX is unusable (boots to "Recovery: system registry file is missing").
+$systemHive = "${winLetter}:\Windows\System32\config\SYSTEM"
+if (-not (Test-Path $systemHive)) {
+    throw "DISM apply incomplete — $systemHive does not exist. The install.wim may be corrupt or the apply was interrupted."
+}
+$hiveSize = (Get-Item $systemHive).Length
+if ($hiveSize -lt 100KB) {
+    throw "DISM apply incomplete — $systemHive is only $hiveSize bytes (expected several MB). The apply was likely interrupted."
+}
+Write-Host "DISM apply verified (SYSTEM hive: $([int]($hiveSize/1KB)) KB)."
+
 Write-Host "Writing UEFI boot files..."
-& bcdboot "${winLetter}:\Windows" /s "${efiLetter}:" /f UEFI
-if ($LASTEXITCODE -ne 0) { throw "bcdboot failed with exit $LASTEXITCODE" }
+# Invoke bcdboot via cmd.exe — direct PowerShell invocation has been
+# observed to silently fail with exit 87 (invalid parameter) on some
+# hosts due to argument parsing quirks. cmd.exe sidesteps them entirely.
+$bcdCmd = "bcdboot ${winLetter}:\Windows /s ${efiLetter}: /f UEFI"
+& cmd /c $bcdCmd
+if ($LASTEXITCODE -ne 0) {
+    throw "bcdboot failed with exit $LASTEXITCODE. Command attempted: $bcdCmd"
+}
+# Verify bcdboot actually wrote the boot files. Exit 0 has been observed
+# with no files written in edge cases; without this check the VHDX boots
+# straight to "Start PXE over IPv4" because the EFI partition is empty.
+$bootMgr = "${efiLetter}:\EFI\Microsoft\Boot\bootmgfw.efi"
+if (-not (Test-Path $bootMgr)) {
+    throw "bcdboot reported success (exit 0) but $bootMgr was not written. EFI partition may not be FAT32 or may be unwriteable."
+}
+Write-Host "Boot files verified at $bootMgr."
 
 # --- Cleanup ------------------------------------------------------------
 Write-Host "Dismounting..."
-Dismount-VHD -Path $OutVhdx
+# Robust dismount. wimserv.exe (Windows Imaging Service) frequently
+# holds the VHDX open after DISM operations and prevents Hyper-V from
+# using it as a differencing-disk parent. Kill it, then retry-loop
+# the dismount until Get-VHD confirms Attached=$false. Throw clearly
+# if we can't actually free the file — better than silently leaving
+# the user with a locked VHDX that fails at VM-creation time.
+Dismount-VHD -Path $OutVhdx -ErrorAction SilentlyContinue
+Get-Process wimserv -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+Start-Sleep -Seconds 1
+
+$retry = 0
+while (((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) -and $retry -lt 5) {
+    Start-Sleep -Seconds 2
+    Get-Process wimserv -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    Dismount-VHD -Path $OutVhdx -ErrorAction SilentlyContinue
+    $retry++
+}
+if ((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) {
+    throw "Failed to dismount $OutVhdx after build. A process is still holding it open."
+}
+
 Dismount-DiskImage -ImagePath $iso | Out-Null
 
 Write-Host "`nDone: $OutVhdx" -ForegroundColor Green

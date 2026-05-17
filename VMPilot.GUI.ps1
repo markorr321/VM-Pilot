@@ -1070,6 +1070,23 @@ function Start-Workflow {
                 }
 
                 Set-Status 'Building Windows VHDX template…'
+
+                # Pre-flight before invoking the builder: kill any orphan
+                # processes that might lock the VHDX or its source files,
+                # and ensure any prior version of the parent VHDX isn't
+                # still mounted. Without this, the builder can fail mid-way
+                # with file-lock errors that leave a half-built VHDX.
+                Get-Process wimserv, wimlib-imagex, dism, '7zr' -EA SilentlyContinue |
+                    Stop-Process -Force -EA SilentlyContinue
+                if (Test-Path $BootSource) {
+                    $existingVhd = Get-VHD -Path $BootSource -EA SilentlyContinue
+                    if ($existingVhd -and $existingVhd.Attached) {
+                        Set-Status 'Dismounting prior parent VHDX before rebuild…'
+                        Dismount-VHD -Path $BootSource -EA SilentlyContinue
+                        Start-Sleep -Seconds 1
+                    }
+                }
+
                 try {
                     # HASHTABLE splat — not @() array splat. Array splatting
                     # passes the items as POSITIONAL args, so '-Release' was
@@ -1166,6 +1183,19 @@ function Start-Workflow {
                          -VMMemoryStartupBytes ([int64]$RamGB * 1GB) `
                          -ParentDisk $BootSource `
                          -ErrorAction Stop | Out-Null
+
+            # Force the VM to boot from the hard disk first (not network).
+            # New-HyperVVM doesn't always set this, and a Gen 2 VM with
+            # Network as the first boot device will hang on "Start PXE
+            # over IPv4" until the PXE attempt times out.
+            try {
+                $vmHd = Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1
+                if ($vmHd) {
+                    Set-VMFirmware -VMName $VMName -FirstBootDevice $vmHd -ErrorAction Stop
+                }
+            } catch {
+                Set-Status "Warning: couldn't set boot order ($($_.Exception.Message)) — VM may try PXE first"
+            }
 
             # ===== Inject mode-specific payload into the child VHDX =====
             # Online: pre-injected community AutoPilot script (VM stays at OOBE; user runs via Shift+F10)
