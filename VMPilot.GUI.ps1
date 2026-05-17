@@ -1120,6 +1120,19 @@ function Start-Workflow {
             }
 
             # ===== Create VM =====
+            # Free any lingering handles on the parent VHDX before creating a
+            # differencing-disk child. wimserv.exe (Windows Imaging Service)
+            # commonly holds the parent open after DISM-apply finishes, which
+            # makes the New-VM differencing-disk creation fail with
+            # 0x80070020 "The process cannot access the file because it is
+            # being used by another process".
+            $stuck = Get-Process wimserv, wimlib-imagex, dism -ErrorAction SilentlyContinue
+            if ($stuck) {
+                Set-Status 'Releasing parent VHDX (closing wimserv handles)…'
+                $stuck | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+            }
+
             Set-Status 'Creating virtual machine…'
             if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
                 Set-Result -Text "A VM named '$VMName' already exists. Pick a different name." -Color '#F03A47'
