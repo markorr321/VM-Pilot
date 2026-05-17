@@ -117,9 +117,10 @@ function Test-HyperVState {
 }
 
 function Invoke-EnableHyperVWithProgress {
-    # Shows a progress dialog while Enable-WindowsOptionalFeature runs on a
-    # background runspace, so the UI stays responsive (the indeterminate
-    # progress bar keeps animating). Returns @{ Success = bool; Error = string }.
+    # Shows a progress dialog while dism.exe enables Microsoft-Hyper-V-All in
+    # the background. A DispatcherTimer polls the child process so the
+    # indeterminate progress bar keeps animating. Returns
+    # @{ Success = bool; Error = string }.
     [xml]$x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -142,17 +143,19 @@ function Invoke-EnableHyperVWithProgress {
 "@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
 
-    # Spawn a child powershell.exe to run the enable. Doing this in a runspace
-    # fails with "Class not registered" (HRESULT 0x80040154) because the DISM
-    # COM components don't initialize cleanly under a child runspace's
-    # apartment state. A separate process gets its own COM init and works.
-    $psExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
-    $childCmd = "try { Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart -ErrorAction Stop | Out-Null; exit 0 } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
+    # Call dism.exe directly. The PowerShell Enable-WindowsOptionalFeature
+    # cmdlet relies on DISM COM components that are sometimes misregistered
+    # on IT-managed Enterprise machines (HRESULT 0x80040154 "Class not
+    # registered"). dism.exe is a native binary that does the same work
+    # without that dependency. Exit codes: 0 = success, 3010 = success +
+    # reboot required (which is exactly what we expect for Hyper-V enable).
+    $dismExe = Join-Path $env:WINDIR 'System32\dism.exe'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName               = $psExe
-    $psi.Arguments              = "-NoProfile -ExecutionPolicy Bypass -Command `"& { $childCmd }`""
+    $psi.FileName               = $dismExe
+    $psi.Arguments              = '/Online /Enable-Feature /FeatureName:Microsoft-Hyper-V-All /All /NoRestart /Quiet'
     $psi.UseShellExecute        = $false
     $psi.RedirectStandardError  = $true
+    $psi.RedirectStandardOutput = $true
     $psi.CreateNoWindow         = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
 
@@ -162,11 +165,13 @@ function Invoke-EnableHyperVWithProgress {
     $timer.Add_Tick({
         if ($proc.HasExited) {
             $timer.Stop()
+            $stdoutText = $proc.StandardOutput.ReadToEnd().Trim()
             $stderrText = $proc.StandardError.ReadToEnd().Trim()
-            if ($proc.ExitCode -eq 0) {
+            if ($proc.ExitCode -in 0, 3010) {
                 $script:__enableResult = @{ Success = $true; Error = $null }
             } else {
-                $errMsg = if ($stderrText) { $stderrText } else { "Enable failed (exit code $($proc.ExitCode))" }
+                $combined = (($stderrText, $stdoutText) -join "`n").Trim()
+                $errMsg = if ($combined) { $combined } else { "dism.exe exit code $($proc.ExitCode)" }
                 $script:__enableResult = @{ Success = $false; Error = $errMsg }
             }
             $dlg.Close()

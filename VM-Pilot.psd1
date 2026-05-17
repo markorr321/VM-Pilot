@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.4'
+    ModuleVersion     = '0.1.5'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,6 +42,14 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.1.5
+- Fix "Enable Failed: Class not registered" on IT-managed Enterprise
+  machines. Switching to a child PowerShell process in 0.1.1 wasn't
+  enough — the DISM COM components themselves can be misregistered
+  on locked-down boxes, so even the child process hit HRESULT
+  0x80040154. Now calls dism.exe directly (native binary, no COM
+  dependency) which works regardless of the broken registration.
+
 0.1.4
 - Hyper-V startup check is now sub-second on Pro/Enterprise/Education boxes.
   Previously we ran up to three Get-WindowsOptionalFeature lookups against
