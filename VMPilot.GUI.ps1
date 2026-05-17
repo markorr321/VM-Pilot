@@ -833,9 +833,15 @@ function Start-Workflow {
                 # Always pull a fresh Fido before building. Microsoft periodically
                 # tweaks their ISO download endpoints which breaks the on-disk Fido;
                 # grabbing the latest from upstream means the build works first try
-                # without a retry loop.
+                # without a retry loop. Cache it in a stable location (NOT the
+                # module folder — that would pollute the published package on
+                # Publish-Module).
+                $fidoCacheDir = 'C:\Tools\WinVHDX'
+                if (-not (Test-Path $fidoCacheDir)) {
+                    New-Item -Path $fidoCacheDir -ItemType Directory -Force | Out-Null
+                }
                 Set-Status 'Refreshing Fido from GitHub…'
-                $fidoPath = Join-Path (Split-Path $BuilderScript -Parent) 'Fido.ps1'
+                $fidoPath = Join-Path $fidoCacheDir 'Fido.ps1'
                 try {
                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                     Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' `
@@ -848,7 +854,7 @@ function Start-Workflow {
 
                 Set-Status 'Building Windows VHDX template (one-time, may take 5–30 min)…'
                 try {
-                    & $BuilderScript -Release $Release -Edition Pro -OutVhdx $BootSource 2>&1 | ForEach-Object {
+                    & $BuilderScript -Release $Release -Edition Pro -OutVhdx $BootSource -WorkDir $fidoCacheDir 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
                         elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }

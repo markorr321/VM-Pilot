@@ -10,3 +10,6 @@
 *.log
 *.tmp
 *.bak
+
+# Third-party runtime artifacts — fetched at build time, not redistributed
+Fido.ps1
