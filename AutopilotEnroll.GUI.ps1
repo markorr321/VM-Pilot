@@ -23,7 +23,7 @@ $serial = try { (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).Serial
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AutoPilot Enrollment"
+        Title="VM-Pilot"
         Width="500" Height="540"
         WindowStartupLocation="CenterScreen"
         Background="#161616" Foreground="#FFFFFF"
@@ -86,7 +86,8 @@ $serial = try { (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).Serial
     </Grid.RowDefinitions>
 
     <StackPanel Grid.Row="0" Margin="0,0,0,20">
-      <TextBlock Text="AutoPilot Enrollment" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock Text="VM-Pilot" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock Text="AutoPilot Enrollment" Foreground="#909090" FontSize="13" Margin="0,2,0,0"/>
       <TextBlock x:Name="SerialText" Foreground="#909090" FontSize="12" Margin="0,4,0,0"/>
     </StackPanel>
 
