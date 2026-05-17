@@ -32,6 +32,7 @@ exit /b
 
 # Configuration variables (you can modify these as needed)
 $VMName = $null  # Will prompt for VM selection if not set
+$CreateNew = $false  # Set by the mode prompt below
 $FilesToCopy = @("C:\Autopilot HWID Collection\AutoPilotHWID-Collection.bat")
 $SearchPattern = "AutoPilotHWID*"
 $SourceFolder = "HWID"
@@ -43,6 +44,281 @@ $separator = "=" * 80
 Write-Host "`n$separator" -ForegroundColor Cyan
 Write-Host "  HyperPilot HWID Collection Workflow" -ForegroundColor Cyan
 Write-Host "$separator" -ForegroundColor Cyan
+
+# ============================================================================
+# STEP 0: CHOOSE MODE (create new VM vs. pick existing)
+# ============================================================================
+
+Write-Host "`nHow would you like to proceed?" -ForegroundColor Cyan
+Write-Host "  [1] Create a new VM (via HyperV.VMFactory) and then collect HWID" -ForegroundColor Yellow
+Write-Host "  [2] Use an existing VM" -ForegroundColor Yellow
+
+do {
+    $modeSel = Read-Host "`nSelect option (1-2)"
+} while ($modeSel -ne '1' -and $modeSel -ne '2')
+
+if ($modeSel -eq '1') { $CreateNew = $true }
+
+# ============================================================================
+# STEP 0.5: CREATE NEW VM (HyperV.VMFactory)
+# ============================================================================
+
+if ($CreateNew) {
+    Write-Host "`n$separator" -ForegroundColor Cyan
+    Write-Host "  PHASE 0: Create New VM" -ForegroundColor Cyan
+    Write-Host "$separator" -ForegroundColor Cyan
+
+    # Ensure HyperV.VMFactory module is available
+    if (-not (Get-Module -ListAvailable -Name HyperV.VMFactory)) {
+        Write-Host "`nHyperV.VMFactory module not found. Installing from PSGallery..." -ForegroundColor Yellow
+        try {
+            if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+                Install-PackageProvider -Name NuGet -Force -Scope CurrentUser | Out-Null
+            }
+            Install-Module -Name HyperV.VMFactory -Scope CurrentUser -Force -ErrorAction Stop
+            Write-Host "✓ Module installed" -ForegroundColor Green
+        } catch {
+            Write-Error "Failed to install HyperV.VMFactory: $_"
+            exit 1
+        }
+    }
+    Import-Module HyperV.VMFactory -ErrorAction Stop
+
+    # Prompt: VM name (must not collide with an existing VM)
+    do {
+        $newVMName = Read-Host "`nName for new VM"
+        if ([string]::IsNullOrWhiteSpace($newVMName)) {
+            Write-Host "VM name cannot be empty." -ForegroundColor Red
+            $nameInvalid = $true
+        } elseif (Get-VM -Name $newVMName -ErrorAction SilentlyContinue) {
+            Write-Host "A VM named '$newVMName' already exists. Choose another name." -ForegroundColor Red
+            $nameInvalid = $true
+        } else {
+            $nameInvalid = $false
+        }
+    } while ($nameInvalid)
+
+    # Prompt: VM storage path
+    $defaultVMPath = "C:\VMs"
+    $vmPathInput = Read-Host "VM storage path [default: $defaultVMPath]"
+    $VMPath = if ([string]::IsNullOrWhiteSpace($vmPathInput)) { $defaultVMPath } else { $vmPathInput }
+    if (-not (Test-Path $VMPath)) {
+        try {
+            New-Item -Path $VMPath -ItemType Directory -Force | Out-Null
+            Write-Host "Created folder: $VMPath" -ForegroundColor Green
+        } catch {
+            Write-Error "Could not create $VMPath : $_"
+            exit 1
+        }
+    }
+
+    # Prompt: virtual switch (pick from numbered list of existing switches)
+    $switches = @(Get-VMSwitch)
+    if ($switches.Count -eq 0) {
+        Write-Error "No Hyper-V virtual switches found. Create one in Hyper-V Manager first."
+        exit 1
+    }
+    Write-Host "`nAvailable virtual switches:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $switches.Count; $i++) {
+        Write-Host ("  [{0}] {1,-30} Type: {2}" -f ($i + 1), $switches[$i].Name, $switches[$i].SwitchType) -ForegroundColor Yellow
+    }
+    do {
+        $swSel = Read-Host "Select switch number (1-$($switches.Count))"
+        $swNum = 0
+        $swValid = [int]::TryParse($swSel, [ref]$swNum) -and $swNum -ge 1 -and $swNum -le $switches.Count
+        if (-not $swValid) { Write-Host "Invalid selection." -ForegroundColor Red }
+    } while (-not $swValid)
+    $VMSwitchName = $switches[$swNum - 1].Name
+
+    # Prompt: boot source (ISO for fresh install OR parent VHDX for differencing disk)
+    $defaultBootSource = "C:\HyperPilot\Templates\24H2.vhdx"
+    do {
+        $bootInput = Read-Host "Boot source (.iso for fresh install, .vhdx for sysprepped template) [default: $defaultBootSource]"
+        $bootSource = if ([string]::IsNullOrWhiteSpace($bootInput)) { $defaultBootSource } else { $bootInput }
+        if (-not (Test-Path $bootSource -PathType Leaf)) {
+            Write-Host "File not found: $bootSource" -ForegroundColor Red
+            $bootValid = $false
+        } else {
+            $ext = [System.IO.Path]::GetExtension($bootSource).ToLowerInvariant()
+            if ($ext -ne '.iso' -and $ext -ne '.vhdx') {
+                Write-Host "Unsupported extension: $ext (must be .iso or .vhdx)" -ForegroundColor Red
+                $bootValid = $false
+            } else {
+                $bootValid = $true
+            }
+        }
+    } while (-not $bootValid)
+    $useParentDisk = ([System.IO.Path]::GetExtension($bootSource).ToLowerInvariant() -eq '.vhdx')
+
+    # Prompt: customize specs (defaults are tuned for Win11 + Autopilot)
+    if ($useParentDisk) {
+        Write-Host "`nDefault VM specs: Generation 2, 4 GB RAM, 2 vCPU, TPM enabled (OS disk size inherited from parent)" -ForegroundColor Cyan
+    } else {
+        Write-Host "`nDefault VM specs: Generation 2, 4 GB RAM, 2 vCPU, 64 GB OS disk, TPM enabled" -ForegroundColor Cyan
+    }
+    $customize = Read-Host "Customize specs? [y/N]"
+    if ($customize -match '^[Yy]') {
+        $memInput = Read-Host "Memory in GB [4]"
+        $cpuInput = Read-Host "vCPU count [2]"
+        $memBytes = if ($memInput) { [int64]$memInput * 1GB } else { 4GB }
+        $cpuCount = if ($cpuInput) { [int]$cpuInput } else { 2 }
+        if (-not $useParentDisk) {
+            $diskInput = Read-Host "OS disk size in GB [64]"
+            $diskBytes = if ($diskInput) { [int64]$diskInput * 1GB } else { 64GB }
+        }
+    } else {
+        $memBytes = 4GB
+        $cpuCount = 2
+        if (-not $useParentDisk) { $diskBytes = 64GB }
+    }
+
+    # Create the VM (route to -ParentDisk for VHDX, -ISOPath for ISO)
+    # For VHDX path we delay PowerOn until after unattend.xml is injected.
+    Write-Host "`nCreating VM '$newVMName'..." -ForegroundColor Cyan
+    $newVMArgs = @{
+        VMName               = $newVMName
+        Path                 = $VMPath
+        VMSwitch             = $VMSwitchName
+        VMGeneration         = 2
+        VMProcessorCount     = $cpuCount
+        VMMemoryStartupBytes = $memBytes
+        ErrorAction          = 'Stop'
+    }
+    if ($useParentDisk) {
+        $newVMArgs['ParentDisk'] = $bootSource
+    } else {
+        $newVMArgs['ISOPath']         = $bootSource
+        $newVMArgs['OSDiskSizeBytes'] = $diskBytes
+        $newVMArgs['PowerOnVM']       = $true
+    }
+    try {
+        New-HyperVVM @newVMArgs
+        Write-Host "✓ VM created" -ForegroundColor Green
+    } catch {
+        Write-Error "VM creation failed: $_"
+        exit 1
+    }
+
+    $VMName = $newVMName
+
+    if ($useParentDisk) {
+        # --- Inject the collection bat into the child VHDX, then boot to OOBE ---
+        # VM will land at the OOBE region screen; user runs the bat via Shift+F10.
+        Write-Host "`nInjecting collection script into child VHDX..." -ForegroundColor Cyan
+
+        $childVhd = (Get-VMHardDiskDrive -VMName $newVMName | Select-Object -First 1).Path
+        if (-not $childVhd -or -not (Test-Path $childVhd)) {
+            Write-Error "Could not locate child VHDX for $newVMName"
+            exit 1
+        }
+
+        # Validate every file we plan to inject exists on the host first
+        foreach ($f in $FilesToCopy) {
+            if (-not (Test-Path $f -PathType Leaf)) {
+                Write-Error "Source file not found on host: $f"
+                exit 1
+            }
+        }
+
+        try {
+            Mount-VHD -Path $childVhd -ErrorAction Stop
+        } catch {
+            Write-Error "Failed to mount child VHDX: $_"
+            exit 1
+        }
+
+        $injectedPaths = @()
+        try {
+            $vhdFile  = Split-Path $childVhd -Leaf
+            $disk     = Get-Disk | Where-Object { $_.Location -like "*$vhdFile*" }
+            $partition = $disk | Get-Partition | Sort-Object Size -Descending | Select-Object -First 1
+            if (-not $partition) { throw "Could not find Windows partition on $childVhd" }
+
+            if (-not $partition.DriveLetter) {
+                $usedLetters = Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Name
+                $letter = (67..90 | ForEach-Object { [char]$_ } | Where-Object { $_ -notin $usedLetters }) | Select-Object -First 1
+                if (-not $letter) { throw "No available drive letters" }
+                Set-Partition -InputObject $partition -NewDriveLetter $letter
+                Start-Sleep -Seconds 2
+                $driveLetter = $letter
+            } else {
+                $driveLetter = $partition.DriveLetter
+            }
+
+            foreach ($src in $FilesToCopy) {
+                $leaf = Split-Path $src -Leaf
+                $dst  = Join-Path "${driveLetter}:\" $leaf
+                Copy-Item -Path $src -Destination $dst -Force
+                $injectedPaths += "C:\$leaf"
+                Write-Host "✓ Injected: C:\$leaf" -ForegroundColor Green
+            }
+
+            # Also drop the first bat as %WINDIR%\Setup\Scripts\SetupComplete.cmd.
+            # Windows auto-runs SetupComplete.cmd from this exact path after specialize,
+            # before OOBE shows — no unattend.xml dance required.
+            $setupScriptsDir = "${driveLetter}:\Windows\Setup\Scripts"
+            if (-not (Test-Path $setupScriptsDir)) {
+                New-Item -Path $setupScriptsDir -ItemType Directory -Force | Out-Null
+            }
+            $setupCompletePath = Join-Path $setupScriptsDir "SetupComplete.cmd"
+            Copy-Item -Path $FilesToCopy[0] -Destination $setupCompletePath -Force
+            Write-Host "✓ Injected: $setupCompletePath (auto-runs at first boot)" -ForegroundColor Green
+        } finally {
+            Dismount-VHD -Path $childVhd -ErrorAction SilentlyContinue
+        }
+
+        # Phase 1 (Copy-VMFile) is unnecessary now — the bat is already on the disk.
+        $SkipPhase1 = $true
+
+        # Boot the VM (will run collection via specialize, then shut itself down)
+        Write-Host "`nStarting VM..." -ForegroundColor Cyan
+        Start-VM -Name $newVMName -ErrorAction Stop
+        Write-Host "✓ VM started — Windows will auto-collect HWID, then shut down." -ForegroundColor Green
+
+        # Auto-launch vmconnect so the user can watch progress
+        try {
+            Start-Process vmconnect.exe -ArgumentList 'localhost', $newVMName -ErrorAction Stop
+            Write-Host "✓ vmconnect launched for '$newVMName' (watch progress)" -ForegroundColor Green
+        } catch {
+            Write-Warning "Could not auto-launch vmconnect: $_"
+        }
+
+        # Poll for VM to shut itself down after RunSynchronousCommand completes
+        Write-Host "`nWaiting for VM to complete collection and shut down..." -ForegroundColor Yellow
+        $maxWait = 900  # 15 minutes
+        $elapsed = 0
+        $shutdown = $false
+        while ($elapsed -lt $maxWait) {
+            $state = (Get-VM -Name $newVMName -ErrorAction SilentlyContinue).State
+            if ($state -eq 'Off') { $shutdown = $true; break }
+            Start-Sleep -Seconds 5
+            $elapsed += 5
+            if ($elapsed % 30 -eq 0) {
+                Write-Host "  ...waiting (${elapsed}s elapsed, state=$state)" -ForegroundColor Gray
+            }
+        }
+        if (-not $shutdown) {
+            Write-Warning "VM did not shut down within $maxWait seconds. Forcing shutdown to continue extraction."
+            Stop-VM -Name $newVMName -TurnOff -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "✓ VM has shut down — proceeding to file extraction" -ForegroundColor Green
+        }
+    } else {
+        # ISO install path — still requires a human at vmconnect
+        Write-Host "`n$separator" -ForegroundColor Yellow
+        Write-Host "  MANUAL STEP: Install Windows on the VM" -ForegroundColor Yellow
+        Write-Host "$separator" -ForegroundColor Yellow
+        Write-Host "Open 'vmconnect.exe' or Hyper-V Manager and complete the Windows install on" -ForegroundColor White
+        Write-Host "VM '$VMName' until you reach the desktop (Guest Services need to be running)." -ForegroundColor White
+        Read-Host "`nPress Enter once the VM is at the desktop to continue with HWID collection"
+    }
+}
+
+# Default: don't skip Phase 1 unless the parent-disk path set it above
+if (-not (Get-Variable -Name SkipPhase1 -Scope Local -ErrorAction SilentlyContinue) -and
+    -not (Get-Variable -Name SkipPhase1 -Scope Script -ErrorAction SilentlyContinue)) {
+    $SkipPhase1 = $false
+}
 
 # ============================================================================
 # STEP 1: SELECT VM
@@ -94,6 +370,8 @@ if (-not $vm) {
     Write-Error "VM '$VMName' not found"
     exit 1
 }
+
+if (-not $SkipPhase1) {
 
 Write-Host "`n$separator" -ForegroundColor Cyan
 Write-Host "  PHASE 1: Copy Scripts TO VM" -ForegroundColor Cyan
@@ -206,6 +484,8 @@ Write-Host "`n✓ Script copied to VM: C:\$batFileName" -ForegroundColor Green
 Write-Host "Run the .bat file on the Hyper-V VM, then press Enter to continue" -ForegroundColor Yellow
 
 Read-Host "`nPress Enter to continue"
+
+} # end if (-not $SkipPhase1)
 
 # ============================================================================
 # STEP 4: COPY FILES FROM VM
