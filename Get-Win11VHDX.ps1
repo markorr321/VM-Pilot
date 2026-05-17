@@ -13,7 +13,11 @@ param(
     [string]$Language = 'English',
     [int]   $SizeGB   = 64,
     [string]$WorkDir  = 'C:\Tools\WinVHDX',
-    [string]$OutVhdx  = "C:\VMs\Win11-$Release.vhdx"
+    [string]$OutVhdx  = "C:\VMs\Win11-$Release.vhdx",
+    # Pre-supplied ISO. If provided, skips Fido + download entirely and
+    # DISM-applies the existing file. Lets the GUI feed an ISO from any
+    # source (UUP Dump, Visual Studio, VLSC, USB drive, etc.).
+    [string]$IsoPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,8 +38,18 @@ if (-not (Test-Path $fido)) {
     Invoke-WebRequest 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' -OutFile $fido
 }
 
-# --- Download ISO -------------------------------------------------------
-$iso = Join-Path $WorkDir "Win11-$Release-$Edition.iso"
+# --- Resolve ISO --------------------------------------------------------
+# If -IsoPath was supplied (e.g. from UUP Dump or a hand-picked file), use
+# that and skip the Fido + download flow entirely.
+if ($IsoPath) {
+    if (-not (Test-Path $IsoPath -PathType Leaf)) {
+        throw "Supplied -IsoPath does not exist: $IsoPath"
+    }
+    $iso = $IsoPath
+    Write-Host "Using supplied ISO: $iso"
+} else {
+    $iso = Join-Path $WorkDir "Win11-$Release-$Edition.iso"
+}
 if (-not (Test-Path $iso)) {
     # Microsoft's public download page now offers only the most-recent
     # Windows 11 release as a single combined Home/Pro/Edu ISO. Older

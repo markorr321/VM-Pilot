@@ -1,7 +1,7 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.1.4'
+    ModuleVersion     = '0.2.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -30,6 +30,7 @@
         'VMPilotCollect.ps1',
         'AutopilotEnroll.GUI.ps1',
         'Get-Win11VHDX.ps1',
+        'Get-UUPDumpISO.ps1',
         'Reset-VMPilot.ps1',
         'VMPilot.bat',
         'README.md'
@@ -42,6 +43,23 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.2.0
+- New first-time setup dialog. When no cached parent VHDX exists for the
+  selected release, the GUI prompts for the ISO source: Download via UUP
+  Dump (recommended), or Browse for an existing ISO. UUP Dump uses the
+  Windows Update CDN (*.delivery.mp.microsoft.com), which corporate
+  firewalls almost never block — solves the "Microsoft software-download
+  endpoint is blocked" failure mode hit on locked-down Enterprise networks.
+- New bundled Get-UUPDumpISO.ps1 helper. Queries the UUP Dump API,
+  downloads the conversion script pack, patches ConvertConfig.ini with
+  AutoExit=1 / ResetBase=1 / SkipWinRE=1 for non-interactive operation,
+  and runs the conversion. ~30-60 min wall time per ISO, no user input.
+- Builder Get-Win11VHDX.ps1 now accepts -IsoPath. If supplied, skips the
+  Fido + download flow entirely and DISM-applies the supplied ISO.
+- WIN RELEASE picker is back. Per-release VHDX cache
+  (C:\VMs\Win11-24H2.vhdx, C:\VMs\Win11-25H2.vhdx) since UUP Dump
+  reliably serves both 24H2 and 25H2 (where Fido only offered Latest).
+
 0.1.4
 - No console flash on Start-VMPilot or UAC elevation. Switched from
   Start-Process -WindowStyle Hidden (which hides the console after it

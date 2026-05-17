@@ -406,19 +406,40 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
       <TextBlock Text="Spin up a fresh Hyper-V VM and collect the AutoPilot hardware hash." Foreground="#909090" FontSize="13" Margin="0,6,0,0"/>
     </StackPanel>
 
-    <!-- Mode -->
-    <StackPanel Grid.Row="1" Margin="0,0,0,18">
-      <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="6"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline" IsChecked="True" Style="{StaticResource Segment}"/>
-        <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online"  Style="{StaticResource Segment}"/>
-      </Grid>
-    </StackPanel>
+    <!-- Mode (left) + Win Release (right) -->
+    <Grid Grid.Row="1" Margin="0,0,0,18">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="20"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <StackPanel Grid.Column="0">
+        <TextBlock Text="MODE" Style="{StaticResource FieldLabel}"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <RadioButton Grid.Column="0" x:Name="ModeOffline" GroupName="Mode" Content="Offline" IsChecked="True" Style="{StaticResource Segment}"/>
+          <RadioButton Grid.Column="2" x:Name="ModeOnline"  GroupName="Mode" Content="Online"  Style="{StaticResource Segment}"/>
+        </Grid>
+      </StackPanel>
+
+      <StackPanel Grid.Column="2">
+        <TextBlock Text="WIN RELEASE" Style="{StaticResource FieldLabel}"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <RadioButton Grid.Column="0" x:Name="Rel24H2" GroupName="Release" Content="24H2" Style="{StaticResource Segment}"/>
+          <RadioButton Grid.Column="2" x:Name="Rel25H2" GroupName="Release" Content="25H2" IsChecked="True" Style="{StaticResource Segment}"/>
+        </Grid>
+      </StackPanel>
+    </Grid>
 
     <!-- VM name -->
     <StackPanel Grid.Row="2" Margin="0,0,0,18">
@@ -617,6 +638,8 @@ $ResultText     = $window.FindName('ResultText')
 $CompletedIcon  = $window.FindName('CompletedIcon')
 $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
+$Rel24H2        = $window.FindName('Rel24H2')
+$Rel25H2        = $window.FindName('Rel25H2')
 $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
 $SerialPanel    = $window.FindName('SerialPanel')
@@ -709,12 +732,12 @@ function Start-Workflow {
     $ramGB    = Get-CheckedRadio -Values 4,8,16  -Prefix 'Ram' -Default 4
     $online   = [bool]$ModeOnline.IsChecked
     $groupTag = $GroupTagBox.Text.Trim()
-    # Fido currently only offers the most-recent Windows 11 release. The
-    # builder's -Release parameter still has a ValidateSet for backward
-    # compat, so we pass a valid token here; internally the builder maps
-    # everything to '-Rel Latest' for the actual Fido call.
-    $release    = '25H2'
-    $bootSource = 'C:\VMs\Win11.vhdx'
+    # WIN RELEASE picker. Per-release VHDX cache so each release has its
+    # own parent. UUP Dump (preferred source) accepts both 24H2 and 25H2,
+    # so the picker is real again — different from the Fido-only era where
+    # only Latest worked.
+    $release    = if ($Rel24H2.IsChecked) { '24H2' } else { '25H2' }
+    $bootSource = "C:\VMs\Win11-$release.vhdx"
 
     if ([string]::IsNullOrWhiteSpace($vmName)) {
         Set-Result -Text 'VM name cannot be empty.' -Color '#F03A47'
@@ -819,6 +842,100 @@ function Start-Workflow {
             })
         }
 
+        # Switch the progress bar between indeterminate and determinate.
+        function Set-Progress {
+            param([int]$Percent = -1)
+            $Window.Dispatcher.Invoke([Action]{
+                if ($Percent -lt 0) {
+                    $ActivityBar.IsIndeterminate = $true
+                } else {
+                    $ActivityBar.IsIndeterminate = $false
+                    $ActivityBar.Maximum         = 100
+                    $ActivityBar.Value           = $Percent
+                }
+            })
+        }
+
+        # First-time setup: ask where the Windows 11 ISO should come from.
+        # Returns @{ Source = 'UUPDump'|'Browse'|'Fido'|'Cancel'; IsoPath = '' }.
+        function Show-IsoSourceDialog {
+            param([string]$ReleaseLabel)
+            $script:__isoSource = 'Cancel'
+            $script:__isoBrowsePath = ''
+            $Window.Dispatcher.Invoke([Action]{
+                [xml]$x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Build Windows VHDX" Width="540" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Build Windows VHDX" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,8"/>
+    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,18"
+               Text="No cached parent VHDX for $ReleaseLabel was found. Pick where to source the Windows 11 install media:"/>
+
+    <StackPanel Grid.Row="2" Orientation="Vertical">
+      <Button x:Name="BtnUUPDump" Height="50" Margin="0,0,0,10"
+              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
+              HorizontalContentAlignment="Left" Padding="14,0,0,0">
+        <Button.Content>
+          <StackPanel>
+            <TextBlock Text="Download via UUP Dump  (recommended)"/>
+            <TextBlock Text="Pulls from Windows Update CDN. Works on corporate networks. 30-60 min."
+                       Foreground="#D0E5FA" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Button.Content>
+      </Button>
+      <Button x:Name="BtnBrowse" Height="50" Margin="0,0,0,10"
+              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
+              HorizontalContentAlignment="Left" Padding="14,0,0,0">
+        <Button.Content>
+          <StackPanel>
+            <TextBlock Text="Browse for an existing ISO..."/>
+            <TextBlock Text="Use a Windows 11 ISO you already have (Visual Studio, VLSC, MSDN, USB)."
+                       Foreground="#909090" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Button.Content>
+      </Button>
+    </StackPanel>
+
+    <Button Grid.Row="3" x:Name="BtnCancel" Content="CANCEL"
+            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,12,0,0"
+            Background="#1F1F1F" Foreground="#C0C0C0" BorderThickness="0"
+            FontWeight="SemiBold" Cursor="Hand"/>
+  </Grid>
+</Window>
+"@
+                $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+                $dlg.Owner = $Window
+                $dlg.FindName('BtnUUPDump').Add_Click({ $script:__isoSource = 'UUPDump'; $dlg.Close() })
+                $dlg.FindName('BtnBrowse').Add_Click({
+                    $ofd = New-Object Microsoft.Win32.OpenFileDialog
+                    $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
+                    $ofd.Title       = "Pick a Windows 11 $ReleaseLabel ISO"
+                    $ofd.Multiselect = $false
+                    if ($ofd.ShowDialog($dlg)) {
+                        $script:__isoSource     = 'Browse'
+                        $script:__isoBrowsePath = $ofd.FileName
+                        $dlg.Close()
+                    }
+                })
+                $dlg.FindName('BtnCancel').Add_Click({ $script:__isoSource = 'Cancel'; $dlg.Close() })
+                [void]$dlg.ShowDialog()
+            })
+            return @{ Source = $script:__isoSource; IsoPath = $script:__isoBrowsePath }
+        }
+
         try {
             # ===== VHDX template =====
             if (Test-Path $BootSource -PathType Leaf) {
@@ -830,46 +947,68 @@ function Start-Workflow {
                     return
                 }
 
-                # Always pull a fresh Fido before building. Microsoft periodically
-                # tweaks their ISO download endpoints which breaks the on-disk Fido;
-                # grabbing the latest from upstream means the build works first try
-                # without a retry loop. Cache it in a stable location (NOT the
-                # module folder — that would pollute the published package on
-                # Publish-Module).
-                $fidoCacheDir = 'C:\Tools\WinVHDX'
-                if (-not (Test-Path $fidoCacheDir)) {
-                    New-Item -Path $fidoCacheDir -ItemType Directory -Force | Out-Null
-                }
-                Set-Status 'Refreshing Fido from GitHub…'
-                $fidoPath = Join-Path $fidoCacheDir 'Fido.ps1'
-                try {
-                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' `
-                                      -OutFile $fidoPath -UseBasicParsing -ErrorAction Stop
-                } catch {
-                    Set-Result -Text "Failed to refresh Fido from GitHub: $($_.Exception.Message)" -Color '#F03A47'
+                # Ask the user where the ISO should come from.
+                $choice = Show-IsoSourceDialog -ReleaseLabel $Release
+                if (-not $choice -or $choice.Source -eq 'Cancel') {
+                    Set-Status 'Cancelled.'
                     Restore-Button
                     return
                 }
 
-                Set-Status 'Building Windows VHDX template (one-time, may take 5–30 min)…'
-                # Helper: switch the ActivityBar between indeterminate (default,
-                # for phases without measurable progress) and determinate with a
-                # real 0-100% value (used during the ISO download).
-                function Set-Progress {
-                    param([int]$Percent = -1)
-                    $Window.Dispatcher.Invoke([Action]{
-                        if ($Percent -lt 0) {
-                            $ActivityBar.IsIndeterminate = $true
-                        } else {
-                            $ActivityBar.IsIndeterminate = $false
-                            $ActivityBar.Maximum         = 100
-                            $ActivityBar.Value           = $Percent
-                        }
-                    })
+                $fidoCacheDir = 'C:\Tools\WinVHDX'
+                if (-not (Test-Path $fidoCacheDir)) {
+                    New-Item -Path $fidoCacheDir -ItemType Directory -Force | Out-Null
                 }
+
+                # Resolve $isoPath depending on the chosen source. $null = let
+                # the builder fall back to its own Fido pipeline.
+                $isoPath = $null
+
+                if ($choice.Source -eq 'UUPDump') {
+                    $uupHelper = Join-Path $ScriptDir 'Get-UUPDumpISO.ps1'
+                    if (-not (Test-Path $uupHelper)) {
+                        Set-Result -Text "Get-UUPDumpISO.ps1 not found at $uupHelper. Reinstall the module." -Color '#F03A47'
+                        Restore-Button
+                        return
+                    }
+                    Set-Status 'Starting UUP Dump download (30-60 min)…'
+                    try {
+                        $uupOutput = & $uupHelper -Release $Release 2>&1 | ForEach-Object {
+                            $line = "$_"
+                            if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…' }
+                            elseif ($line -match '^\[UUP\] Selected build: (.+)$')             { Set-Status "Selected build: $($Matches[1])" }
+                            elseif ($line -match '^\[UUP\] Downloading conversion script pack'){ Set-Status 'Downloading UUP Dump conversion pack…' }
+                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 30-60 min)…' }
+                            elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…' }
+                            $line
+                        }
+                        $isoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
+                        if (-not $isoPath) {
+                            throw 'UUP Dump helper completed but did not return a valid ISO path.'
+                        }
+                    } catch {
+                        Set-Result -Text "UUP Dump download failed: $($_.Exception.Message)" -Color '#F03A47'
+                        Restore-Button
+                        return
+                    }
+                } elseif ($choice.Source -eq 'Browse') {
+                    if (-not (Test-Path $choice.IsoPath)) {
+                        Set-Result -Text "Selected ISO not found: $($choice.IsoPath)" -Color '#F03A47'
+                        Restore-Button
+                        return
+                    }
+                    $isoPath = $choice.IsoPath
+                    Set-Status "Using ISO: $isoPath"
+                } else {
+                    Set-Result -Text "Unknown ISO source '$($choice.Source)'." -Color '#F03A47'
+                    Restore-Button
+                    return
+                }
+
+                Set-Status 'Building Windows VHDX template…'
                 try {
-                    & $BuilderScript -Release $Release -Edition Pro -OutVhdx $BootSource -WorkDir $fidoCacheDir 2>&1 | ForEach-Object {
+                    $builderArgs = @('-Release', $Release, '-Edition', 'Pro', '-OutVhdx', $BootSource, '-WorkDir', $fidoCacheDir, '-IsoPath', $isoPath)
+                    & $BuilderScript @builderArgs 2>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
                         elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }
@@ -883,6 +1022,7 @@ function Start-Workflow {
                             Set-Status 'Windows ISO downloaded.'
                             Set-Progress 100
                         }
+                        elseif ($line -match 'Using supplied ISO')          { Set-Status 'Using supplied ISO…' }
                         elseif ($line -match 'Reusing existing ISO')        { Set-Status 'ISO cached — preparing…' }
                         elseif ($line -match 'Mounting ISO')                { Set-Status 'Mounting ISO…'; Set-Progress -1 }
                         elseif ($line -match 'Using image index')           { Set-Status 'Reading install image…' }
