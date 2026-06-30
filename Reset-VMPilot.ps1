@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Wipes VM-Pilot state so the next run exercises the full pipeline from zero.
 

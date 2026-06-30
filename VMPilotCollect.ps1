@@ -1,4 +1,4 @@
-# VMPilotCollect.ps1 -- runs INSIDE the VM at SetupComplete.cmd (specialize pass).
+﻿# VMPilotCollect.ps1 -- runs INSIDE the VM at SetupComplete.cmd (specialize pass).
 # Offline collection: writes AutoPilot HWID CSV to C:\HWID then exits so the
 # wrapping SetupComplete.cmd can call shutdown.
 #

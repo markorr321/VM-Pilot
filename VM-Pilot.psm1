@@ -1,4 +1,4 @@
-# VM-Pilot.psm1 -- module entry. For now this just exposes Start-VMPilot, which
+﻿# VM-Pilot.psm1 -- module entry. For now this just exposes Start-VMPilot, which
 # spawns the existing VMPilot.GUI.ps1 in a new (hidden) PowerShell process so
 # the GUI's auto-elevation and hidden-console behavior continue to work as
 # they do when the user double-clicks VMPilot.bat.

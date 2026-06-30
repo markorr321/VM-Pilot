@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Downloads a Windows 11 ISO via UUP Dump's API + conversion scripts.
 

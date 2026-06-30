@@ -1,4 +1,4 @@
-@{
+﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
     ModuleVersion     = '0.2.0'

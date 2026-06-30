@@ -1,10 +1,16 @@
-
+﻿
 <#
 .SYNOPSIS
   Downloads a Windows 11 ISO (24H2 or 25H2, current channel) and builds a Gen-2/UEFI VHDX.
 
 .EXAMPLE
   .\Get-Win11VHDX.ps1 -Release 25H2 -Edition Pro -OutVhdx C:\VMs\Win11-25H2.vhdx
+
+.EXAMPLE
+  # Browse to an existing ISO with a file picker instead of downloading.
+  # The VHDX is auto-named after the Windows release detected inside the
+  # picked ISO (e.g. C:\VMs\Win11-25H2.vhdx) unless you pin -OutVhdx:
+  .\Get-Win11VHDX.ps1 -PickIso
 #>
 [CmdletBinding()]
 param(
@@ -17,7 +23,11 @@ param(
     # Pre-supplied ISO. If provided, skips Fido + download entirely and
     # DISM-applies the existing file. Lets the GUI feed an ISO from any
     # source (UUP Dump, Visual Studio, VLSC, USB drive, etc.).
-    [string]$IsoPath
+    [string]$IsoPath,
+    # Pop a Windows "Open file" dialog to pick the ISO interactively. Sets
+    # $IsoPath from whatever the user selects, then follows the same
+    # supplied-ISO path as -IsoPath (skips Fido + download).
+    [switch]$PickIso
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +36,40 @@ $ErrorActionPreference = 'Stop'
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Run this from an elevated PowerShell — VHDX mount + DISM require admin."
+}
+
+# --- Optional ISO file picker -------------------------------------------
+# If -PickIso was requested (and no explicit -IsoPath given), show a native
+# Open-file dialog so the user can browse to the ISO they want to convert.
+# OpenFileDialog requires an STA thread; PowerShell isn't guaranteed to run
+# STA (e.g. -MTA, or pwsh on some hosts), so run the dialog on a dedicated
+# STA thread when needed.
+if ($PickIso -and -not $IsoPath) {
+    Add-Type -AssemblyName System.Windows.Forms
+
+    $showDialog = {
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Title  = 'Select the Windows ISO to convert'
+        $dlg.Filter = 'Disc image (*.iso)|*.iso|All files (*.*)|*.*'
+        $dlg.Multiselect = $false
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $dlg.FileName
+        }
+    }
+
+    if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -eq 'STA') {
+        $picked = & $showDialog
+    } else {
+        $picked = $null
+        $t = [System.Threading.Thread]::new([System.Threading.ThreadStart]{ $script:picked = & $showDialog })
+        $t.SetApartmentState('STA')
+        $t.Start()
+        $t.Join()
+    }
+
+    if (-not $picked) { throw "No ISO selected — cancelled." }
+    $IsoPath = $picked
+    Write-Host "Selected ISO: $IsoPath"
 }
 
 New-Item -ItemType Directory -Force $WorkDir            | Out-Null
@@ -134,8 +178,84 @@ if (-not $imgInfo) {
 }
 Write-Host "Using image index $($imgInfo.ImageIndex): $($imgInfo.ImageName)"
 
+# --- Name the VHDX after the release actually inside the ISO -------------
+# With -PickIso / -IsoPath the ISO can be any build, so the -Release param
+# (and thus the default output name) may not reflect what's really inside.
+# Read the image's build number, map it to a friendly release, and use that
+# to name the VHDX. Only override the name when the caller did NOT pin
+# -OutVhdx explicitly — the GUI always passes -OutVhdx, so it keeps full
+# control of naming; this auto-naming only kicks in on direct invocation.
+$imgDetail = Get-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex
+$imgBuild  = ([Version]$imgDetail.Version).Build
+$buildToRelease = @{ 26100 = '24H2'; 26200 = '25H2' }
+$detectedRelease = $buildToRelease[$imgBuild]
+if ($detectedRelease) {
+    Write-Host "Detected Windows 11 $detectedRelease (build $imgBuild) in image."
+    $Release = $detectedRelease
+} else {
+    # Unknown/newer build: name it by build number so the file is still
+    # accurate and distinct rather than mislabeled with the -Release default.
+    Write-Warning "Unrecognized Windows build $imgBuild - naming VHDX by build number."
+    $detectedRelease = "build$imgBuild"
+}
+if (-not $PSBoundParameters.ContainsKey('OutVhdx')) {
+    $OutVhdx = Join-Path (Split-Path $OutVhdx -Parent) "Win11-$detectedRelease.vhdx"
+    New-Item -ItemType Directory -Force (Split-Path $OutVhdx) | Out-Null
+    Write-Host "Output VHDX name set from image: $OutVhdx"
+}
+
+# --- Remove any existing VHDX at the target path -----------------------
+# A prior build, an Explorer/Disk-Management mount, or a VM created from
+# this VHDX can leave it locked or depended-on. A blind Remove-Item -Force
+# either fails ("being used by another process") or — worse — silently
+# deletes a differencing-disk parent and corrupts the child VM. So: refuse
+# if a VM depends on it (naming the VM), otherwise dismount + retry-delete.
+if (Test-Path $OutVhdx) {
+    $target = [System.IO.Path]::GetFullPath($OutVhdx)
+
+    # Refuse to delete a VHDX any VM is using — directly attached or as a
+    # differencing-disk parent. Deleting it would break that VM.
+    $dependents = @()
+    try {
+        foreach ($vm in (Get-VM -ErrorAction SilentlyContinue)) {
+            foreach ($d in (Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)) {
+                if (-not $d.Path) { continue }
+                $dpFull = [System.IO.Path]::GetFullPath($d.Path)
+                $info   = Get-VHD -Path $d.Path -ErrorAction SilentlyContinue
+                $parent = if ($info -and $info.ParentPath) { [System.IO.Path]::GetFullPath($info.ParentPath) } else { $null }
+                if (($dpFull -ieq $target) -or ($parent -and ($parent -ieq $target))) {
+                    $dependents += $vm.Name
+                    break
+                }
+            }
+        }
+    } catch { }
+    if ($dependents) {
+        throw "Can't rebuild $OutVhdx - VM(s) depend on it as their disk/parent: $($dependents -join ', '). Remove those VMs (CLEANUP VMs) first, then rebuild."
+    }
+
+    # No dependents. Dismount it if attached, drop wimserv handles, retry-delete.
+    if ((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) {
+        Write-Host "Existing VHDX is attached - dismounting before rebuild..."
+        Dismount-VHD -Path $OutVhdx -ErrorAction SilentlyContinue
+    }
+    Get-Process wimserv -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+    $removed = $false
+    for ($i = 0; $i -lt 5 -and -not $removed; $i++) {
+        try { Remove-Item $OutVhdx -Force -ErrorAction Stop; $removed = $true }
+        catch {
+            Start-Sleep -Seconds 1
+            Dismount-VHD -Path $OutVhdx -ErrorAction SilentlyContinue
+            Get-Process wimserv -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $removed) {
+        throw "Can't delete $OutVhdx - it's locked by another process. Is it open or mounted in Explorer / Disk Management? Close whatever is using it, then rebuild."
+    }
+}
+
 # --- Create + partition VHDX -------------------------------------------
-if (Test-Path $OutVhdx) { Remove-Item $OutVhdx -Force }
 
 Write-Host "Creating $OutVhdx ($SizeGB GB, dynamic)..."
 $vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
@@ -146,18 +266,20 @@ $vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
 $disk = Mount-VHD -Path $OutVhdx -Passthru | Get-Disk
 Initialize-Disk -Number $disk.Number -PartitionStyle GPT
 
-# Create + format + assign letter in that ORDER. Assigning the letter at
-# partition-create time (via -AssignDriveLetter) makes Windows see an
-# unformatted volume and pop "You need to format the disk in drive X:
-# before you can use it." Formatting first and assigning the letter after
-# avoids the popup entirely.
+# Assign the drive letter FIRST, then format by letter. Format-Volume
+# -Partition fails with "Invalid Parameter" when formatting the ESP (and,
+# on some hosts, the NTFS volume) on newer Windows builds (observed on
+# 26200); Format-Volume -DriveLetter is reliable. Windows automount was
+# disabled above (mountvol /N), so assigning a letter to a not-yet-formatted
+# volume does NOT pop "You need to format the disk in drive X: before you
+# can use it." — the popup the old format-first ordering was avoiding.
 
 # EFI system partition (FAT32, 100 MB)
 $efi = New-Partition -DiskNumber $disk.Number -Size 100MB `
                      -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
-Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false | Out-Null
 $efi | Add-PartitionAccessPath -AssignDriveLetter
 $efiLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber).DriveLetter
+Format-Volume -DriveLetter $efiLetter -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false | Out-Null
 
 # MSR (16 MB, no letter)
 New-Partition -DiskNumber $disk.Number -Size 16MB `
@@ -166,9 +288,9 @@ New-Partition -DiskNumber $disk.Number -Size 16MB `
 # Windows partition (rest, NTFS)
 $win = New-Partition -DiskNumber $disk.Number -UseMaximumSize `
                      -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
-Format-Volume -Partition $win -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
 $win | Add-PartitionAccessPath -AssignDriveLetter
 $winLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $win.PartitionNumber).DriveLetter
+Format-Volume -DriveLetter $winLetter -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
 
 # --- Apply image + boot files ------------------------------------------
 Write-Host "Applying image (this takes a while)..."

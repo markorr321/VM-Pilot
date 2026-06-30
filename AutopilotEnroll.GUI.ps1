@@ -1,4 +1,4 @@
-# AutopilotEnroll.GUI.ps1 -- runs INSIDE the VM at OOBE.
+﻿# AutopilotEnroll.GUI.ps1 -- runs INSIDE the VM at OOBE.
 # Minimal WPF window that fronts Get-WindowsAutopilotInfoCommunity.ps1.
 # Launched by C:\Enroll.bat from the OOBE Shift+F10 cmd prompt.
 #

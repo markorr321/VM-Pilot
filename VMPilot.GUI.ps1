@@ -1,4 +1,4 @@
-# VMPilot - WPF GUI (dark, minimal)
+﻿# VMPilot - WPF GUI (dark, minimal)
 # Spins up a fresh Hyper-V VM from a cached parent VHDX, collects the AutoPilot
 # hardware hash, and optionally imports it to Intune via Microsoft Graph.
 # Auto-elevates; hides host console; runs the workflow in a background runspace.
@@ -267,7 +267,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VM-Pilot"
-        Width="600" Height="900"
+        Width="600" Height="940"
         WindowStartupLocation="CenterScreen"
         Background="#161616"
         Foreground="#FFFFFF"
@@ -528,9 +528,9 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
       <!-- Center stack: Complete (or red error) + the serial number block -->
       <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
         <TextBlock x:Name="CompletedIcon" Text="Complete"
-                   FontSize="36" FontWeight="SemiBold" Foreground="#1ACB5F"
+                   FontSize="26" FontWeight="SemiBold" Foreground="#1ACB5F"
                    HorizontalAlignment="Center" TextAlignment="Center"
-                   Padding="0,4,0,8"
+                   Padding="0,2,0,4"
                    Visibility="Collapsed"/>
 
         <TextBlock x:Name="ResultText" Text=""
@@ -539,14 +539,29 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
                    Visibility="Collapsed"/>
 
         <!-- DEVICE SERIAL block: shown alongside Complete, auto-copied to clipboard -->
-        <StackPanel x:Name="SerialPanel" Visibility="Collapsed" Margin="0,20,0,0">
+        <StackPanel x:Name="SerialPanel" Visibility="Collapsed" Margin="0,10,0,0">
           <TextBlock Text="DEVICE SERIAL" Style="{StaticResource FieldLabel}" HorizontalAlignment="Center"/>
           <TextBlock x:Name="SerialText" FontSize="14"
                      FontFamily="Cascadia Mono, Consolas, Courier New"
                      Foreground="#FFFFFF" HorizontalAlignment="Center" Margin="0,4,0,0"/>
           <TextBlock Text="copied to clipboard" FontSize="11"
                      Foreground="#707070" HorizontalAlignment="Center"
-                     Margin="0,6,0,0" FontStyle="Italic"/>
+                     Margin="0,4,0,0" FontStyle="Italic"/>
+        </StackPanel>
+
+        <!-- HARDWARE HASH path: shown after an Offline collect. The .csv on the
+             host holding the AutoPilot hardware hash; the link opens its folder. -->
+        <StackPanel x:Name="HashPanel" Visibility="Collapsed" Margin="0,10,0,0">
+          <TextBlock Text="HARDWARE HASH SAVED TO" Style="{StaticResource FieldLabel}" HorizontalAlignment="Center"/>
+          <TextBlock x:Name="HashPathText" FontSize="11"
+                     FontFamily="Cascadia Mono, Consolas, Courier New"
+                     Foreground="#C0C0C0" HorizontalAlignment="Center" TextAlignment="Center"
+                     TextWrapping="Wrap" Margin="0,4,0,0"/>
+          <TextBlock HorizontalAlignment="Center" Margin="0,5,0,0">
+            <Hyperlink x:Name="HashOpenLink" Foreground="#3F9BFE" TextDecorations="Underline">
+              <Run Text="Open folder"/>
+            </Hyperlink>
+          </TextBlock>
         </StackPanel>
       </StackPanel>
 
@@ -559,8 +574,9 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <Button Grid.Column="0" x:Name="IntuneButton" Content="OPEN AUTOPILOT"
-                Width="160" Height="36"
+        <StackPanel Grid.Column="0" Orientation="Horizontal">
+        <Button x:Name="IntuneButton" Content="OPEN AUTOPILOT"
+                Width="148" Height="36"
                 Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
                 FontSize="12" FontWeight="SemiBold" Cursor="Hand">
           <Button.Template>
@@ -580,8 +596,30 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
           </Button.Template>
         </Button>
 
+        <Button x:Name="IsoWizardButton" Content="SETUP"
+                Width="150" Height="36" Margin="8,0,0,0"
+                Background="#107C41" Foreground="#FFFFFF" BorderThickness="0"
+                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#138A48"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#0B5A2F"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+        </Button>
+        </StackPanel>
+
         <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs"
-                Width="140" Height="36"
+                Width="132" Height="36"
                 Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0"
                 FontSize="12" FontWeight="SemiBold" Cursor="Hand">
           <Button.Template>
@@ -602,7 +640,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
         </Button>
 
         <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT"
-                Width="90" Height="36" Margin="8,0,0,0"
+                Width="84" Height="36" Margin="8,0,0,0"
                 Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
                 FontSize="12" FontWeight="SemiBold" Cursor="Hand">
           <Button.Template>
@@ -644,8 +682,12 @@ $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
 $SerialPanel    = $window.FindName('SerialPanel')
 $SerialText     = $window.FindName('SerialText')
+$HashPanel      = $window.FindName('HashPanel')
+$HashPathText   = $window.FindName('HashPathText')
+$HashOpenLink   = $window.FindName('HashOpenLink')
 $CleanupButton    = $window.FindName('CleanupButton')
 $IntuneButton     = $window.FindName('IntuneButton')
+$IsoWizardButton  = $window.FindName('IsoWizardButton')
 $ExitButton       = $window.FindName('ExitButton')
 
 # --- Dark title bar (DWM immersive dark mode) -----------------------------
@@ -701,6 +743,8 @@ function Hide-CompletedIcon {
         $CompletedIcon.Visibility = 'Collapsed'
         $SerialPanel.Visibility   = 'Collapsed'
         $SerialText.Text          = ''
+        $HashPanel.Visibility     = 'Collapsed'
+        $HashPathText.Text        = ''
     })
 }
 function Show-Serial {
@@ -806,6 +850,304 @@ function Show-IsoSourceDialog {
     return $result
 }
 
+# Guided "Get Windows ISO" wizard. Walks the user through downloading a
+# Windows 11 ISO from Microsoft's official page, then runs the builder on
+# the ISO they picked (same code path as Get-Win11VHDX.ps1 -PickIso — the
+# builder auto-detects the release from the ISO and names the VHDX
+# C:\VMs\Win11-<release>.vhdx, exactly where the GUI looks for it). The
+# build streams live progress into this window via a runspace + Dispatcher,
+# mirroring Start-Workflow. The file picker runs here on the UI thread
+# (owned by this window) rather than inside the runspace, so it can't pop
+# up behind the wizard.
+$script:WizRunspace = $null
+$script:WizPSInst   = $null
+function Show-Win11IsoWizard {
+    $downloadUrl = 'https://www.microsoft.com/en-us/software-download/windows11'
+
+    [xml]$x = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Get Windows 11 Install Media" Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Background="#161616" Foreground="#FFFFFF"
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Get Windows 11 Install Media" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,6"/>
+    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"
+               Text="Download a Windows 11 ISO from Microsoft, then build the VM-Pilot parent VHDX from it. The VHDX is auto-named after the release inside the ISO."/>
+
+    <Border Grid.Row="2" Background="#1B1B1B" CornerRadius="8" Padding="16,14" Margin="0,0,0,18">
+      <StackPanel>
+        <TextBlock Text="1.  Click OPEN DOWNLOAD PAGE below." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, choose &quot;Windows 11 (multi-edition ISO for x64 devices)&quot;, then click Download." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="3.  Select the product language, then click Confirm." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="4.  Click the &quot;64-bit Download&quot; button and save the .iso file." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="5.  Once the download is complete, come back here, click BUILD VHDX FROM ISO, pick the file you saved, and wait for the build to finish." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Border>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
+      <Button x:Name="BtnOpenPage" Content="OPEN DOWNLOAD PAGE"
+              Width="200" Height="40"
+              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#1F8AE0"/></Trigger>
+              <Trigger Property="IsPressed"   Value="True"><Setter TargetName="Bd" Property="Background" Value="#0061B0"/></Trigger>
+              <Trigger Property="IsEnabled"   Value="False"><Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/><Setter Property="Foreground" Value="#707070"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
+      </Button>
+
+      <Button x:Name="BtnBuild" Content="BUILD VHDX FROM ISO" Margin="10,0,0,0"
+              Width="210" Height="40"
+              Background="#107C41" Foreground="#FFFFFF" BorderThickness="0"
+              FontSize="12" FontWeight="SemiBold" Cursor="Hand">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#138A48"/></Trigger>
+              <Trigger Property="IsPressed"   Value="True"><Setter TargetName="Bd" Property="Background" Value="#0B5A2F"/></Trigger>
+              <Trigger Property="IsEnabled"   Value="False"><Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/><Setter Property="Foreground" Value="#707070"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
+      </Button>
+    </StackPanel>
+
+    <StackPanel Grid.Row="4" Margin="0,8,0,0">
+      <TextBlock x:Name="WizStatus" Foreground="#C0C0C0" FontSize="12" TextWrapping="Wrap"
+                 Visibility="Collapsed" Margin="0,0,0,8"/>
+      <ProgressBar x:Name="WizBar" Height="4" IsIndeterminate="True"
+                   Foreground="#107C41" Background="#252525" BorderThickness="0"
+                   Visibility="Collapsed"/>
+    </StackPanel>
+
+    <Button Grid.Row="5" x:Name="BtnClose" Content="CLOSE"
+            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,16,0,0"
+            Background="#2A2A2A" Foreground="#C0C0C0" BorderThickness="0"
+            FontWeight="SemiBold" Cursor="Hand"/>
+  </Grid>
+</Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $dlg.Owner = $window
+
+    $btnOpen  = $dlg.FindName('BtnOpenPage')
+    $btnBuild = $dlg.FindName('BtnBuild')
+    $btnClose = $dlg.FindName('BtnClose')
+    $wizStatus = $dlg.FindName('WizStatus')
+    $wizBar    = $dlg.FindName('WizBar')
+
+    $btnOpen.Add_Click({
+        try { Start-Process $downloadUrl } catch {
+            $wizStatus.Visibility = 'Visible'
+            $wizStatus.Foreground = '#F03A47'
+            $wizStatus.Text = "Couldn't open the browser. Go to: $downloadUrl"
+        }
+    })
+
+    $btnBuild.Add_Click({
+        # Guard: if a parent VHDX already exists, warn BEFORE the file picker
+        # and the build. Rebuilding replaces it, and it's blocked entirely
+        # while a VM depends on it — so catch that here instead of after a
+        # doomed build. Best-effort; if Hyper-V queries fail we still warn
+        # about the file existing.
+        $existing = @(Get-ChildItem 'C:\VMs\Win11-*.vhdx' -File -ErrorAction SilentlyContinue)
+        if ($existing.Count -gt 0) {
+            $deps = @()
+            try {
+                $targets = @($existing | ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) })
+                foreach ($vm in (Get-VM -ErrorAction SilentlyContinue)) {
+                    foreach ($d in (Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)) {
+                        if (-not $d.Path) { continue }
+                        $dpFull = [System.IO.Path]::GetFullPath($d.Path)
+                        $info   = Get-VHD -Path $d.Path -ErrorAction SilentlyContinue
+                        $parent = if ($info -and $info.ParentPath) { [System.IO.Path]::GetFullPath($info.ParentPath) } else { $null }
+                        if (($targets -contains $dpFull) -or ($parent -and ($targets -contains $parent))) { $deps += $vm.Name; break }
+                    }
+                }
+            } catch { }
+            $deps = @($deps | Select-Object -Unique)
+
+            $names = ($existing | ForEach-Object { $_.Name }) -join ', '
+            $msg = "A parent VHDX already exists: $names`r`n`r`nRebuilding replaces it."
+            if ($deps.Count) {
+                $msg += "`r`n`r`nThese VM(s) depend on it and must be removed first (CLEANUP VMs), or the rebuild will be blocked:`r`n  $($deps -join ', ')"
+            }
+            $msg += "`r`n`r`nRebuild anyway?"
+            $ans = [System.Windows.MessageBox]::Show($dlg, $msg, 'Parent VHDX already exists',
+                [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+            if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        }
+
+        $ofd = New-Object Microsoft.Win32.OpenFileDialog
+        $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
+        $ofd.Title       = 'Select the Windows 11 ISO you downloaded'
+        $ofd.Multiselect = $false
+        if (-not $ofd.ShowDialog($dlg)) { return }
+        $isoPath = $ofd.FileName
+
+        if (-not (Test-Path $script:BuilderScript)) {
+            $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#F03A47'
+            $wizStatus.Text = "Builder not found: $script:BuilderScript"
+            return
+        }
+
+        # Lock the UI while building; a mid-build close would orphan the runspace.
+        $btnBuild.IsEnabled = $false; $btnBuild.Content = 'BUILDING…'
+        $btnOpen.IsEnabled  = $false; $btnClose.IsEnabled = $false
+        $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#C0C0C0'; $wizStatus.Text = 'Starting build…'
+        $wizBar.Visibility = 'Visible'; $wizBar.IsIndeterminate = $true
+
+        # Shared, in-process flag the runspace flips true only while
+        # Expand-WindowsImage is applying. The Progress-stream handler (below)
+        # honours percentage updates only during that window, so unrelated
+        # progress (e.g. Format-Volume) can't hijack the apply bar.
+        $wizState = [hashtable]::Synchronized(@{ Applying = $false })
+
+        $shared = @{
+            Window        = $dlg
+            Status        = $wizStatus
+            Bar           = $wizBar
+            BuildBtn      = $btnBuild
+            OpenBtn       = $btnOpen
+            CloseBtn      = $btnClose
+            BuilderScript = $script:BuilderScript
+            IsoPath       = $isoPath
+            WizState      = $wizState
+        }
+
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'; $rs.ThreadOptions = 'ReuseThread'; $rs.Open()
+        foreach ($k in $shared.Keys) { $rs.SessionStateProxy.SetVariable($k, $shared[$k]) }
+        $ps = [powershell]::Create(); $ps.Runspace = $rs
+        $script:WizRunspace = $rs; $script:WizPSInst = $ps
+
+        # Expand-WindowsImage (the long apply step) reports real progress via
+        # the PowerShell progress stream, which *>&1 does NOT capture. Subscribe
+        # to the runspace's Progress stream to drive a true percentage on the
+        # bar + status during the apply. Fires on a background thread, so marshal
+        # to the dialog through its Dispatcher.
+        $ps.Streams.Progress.add_DataAdded({
+            param($s, $e)
+            try {
+                if (-not $wizState.Applying) { return }
+                $rec = $s[$e.Index]
+                if ($null -eq $rec) { return }
+                $pct = [int]$rec.PercentComplete
+                if ($pct -lt 0 -or $pct -gt 100) { return }
+                $dlg.Dispatcher.Invoke([Action]{
+                    $wizBar.IsIndeterminate = $false
+                    $wizBar.Maximum = 100
+                    $wizBar.Value   = $pct
+                    $wizStatus.Text = "Applying Windows image... $pct%"
+                    $wizStatus.Foreground = '#C0C0C0'
+                })
+            } catch { }
+        })
+
+        $build = {
+            function WSet { param([string]$t, [string]$c = '#C0C0C0')
+                $Window.Dispatcher.Invoke([Action]{ $Status.Text = $t; $Status.Foreground = $c }) }
+            function WBar { param([int]$p = -1)
+                $Window.Dispatcher.Invoke([Action]{
+                    if ($p -lt 0) { $Bar.IsIndeterminate = $true }
+                    else { $Bar.IsIndeterminate = $false; $Bar.Maximum = 100; $Bar.Value = $p }
+                }) }
+            function WDone { param([bool]$ok, [string]$msg)
+                $Window.Dispatcher.Invoke([Action]{
+                    $Bar.Visibility = 'Collapsed'
+                    $Status.Text = $msg
+                    $Status.Foreground = $(if ($ok) { '#3FB950' } else { '#F03A47' })
+                    if (-not $ok) {
+                        # Failure: keep the wizard open so the user can read the
+                        # error and retry the build.
+                        $OpenBtn.IsEnabled  = $true
+                        $CloseBtn.IsEnabled = $true
+                        $BuildBtn.Content   = 'BUILD VHDX FROM ISO'
+                        $BuildBtn.IsEnabled = $true
+                    }
+                }) }
+            function WClose {
+                # Success: let the user read the message, then auto-close so they
+                # return to the GUI to build their first VM. BeginInvoke (async)
+                # so this runspace thread does NOT block on the UI thread while
+                # the dialog's Closing handler disposes this very runspace — a
+                # synchronous Invoke here would deadlock.
+                Start-Sleep -Milliseconds 2200
+                $Window.Dispatcher.BeginInvoke([Action]{ $Window.Close() }) | Out-Null
+            }
+
+            $script:builtPath = $null
+            try {
+                # Same code path as Get-Win11VHDX.ps1 -PickIso, but the ISO was
+                # already chosen on the UI thread, so feed it via -IsoPath. No
+                # -OutVhdx → the builder auto-detects the release and names the
+                # VHDX C:\VMs\Win11-<release>.vhdx.
+                #
+                # *>&1 (NOT 2>&1): the builder reports every phase via
+                # Write-Host, which lands on the information stream. Inside a
+                # runspace 2>&1 captures only errors, so the phase lines would
+                # never reach this parser and the bar would sit frozen. *>&1
+                # merges all streams so the status updates actually flow.
+                & $BuilderScript -IsoPath $IsoPath *>&1 | ForEach-Object {
+                    $line = "$_"
+                    if     ($line -match 'Using supplied ISO')                 { WSet 'Using supplied ISO…'; WBar -1 }
+                    elseif ($line -match 'Mounting ISO')                       { WSet 'Mounting ISO…'; WBar -1 }
+                    elseif ($line -match 'Detected Windows 11 (\S+)')          { WSet "Detected Windows 11 $($Matches[1]) - building..." }
+                    elseif ($line -match 'Output VHDX name set from image: (.+)$') { $script:builtPath = $Matches[1].Trim(); WSet "Target: $script:builtPath" }
+                    elseif ($line -match 'Using image index')                  { WSet 'Reading install image…' }
+                    elseif ($line -match 'Creating .*GB, dynamic')             { WSet 'Creating empty VHDX…'; WBar -1 }
+                    elseif ($line -match 'Applying image')                     { WSet 'Applying Windows image... 0%'; WBar 0; $WizState.Applying = $true }
+                    elseif ($line -match 'DISM apply verified')                { $WizState.Applying = $false; WSet 'DISM apply verified - install.wim extracted cleanly.'; WBar -1 }
+                    elseif ($line -match 'Writing UEFI')                       { WSet 'Writing UEFI boot files…' }
+                    elseif ($line -match 'Boot files verified')               { WSet 'UEFI boot files verified.' }
+                    elseif ($line -match 'Dismounting')                       { WSet 'Finalizing VHDX…' }
+                    elseif ($line -match '^Done: (.+)$')                       { $script:builtPath = $Matches[1].Trim() }
+                }
+                if ($script:builtPath -and (Test-Path $script:builtPath)) {
+                    WDone $true "Parent VHDX built. Build your first VM!"
+                } else {
+                    WDone $true 'Build your first VM!'
+                }
+                WClose
+            } catch {
+                WDone $false "Build failed: $($_.Exception.Message)"
+            }
+        }
+        [void]$ps.AddScript($build)
+        [void]$ps.BeginInvoke()
+    })
+
+    $btnClose.Add_Click({ $dlg.Close() })
+    $dlg.Add_Closing({
+        if ($script:WizPSInst)   { try { $script:WizPSInst.Stop() | Out-Null; $script:WizPSInst.Dispose() } catch { } }
+        if ($script:WizRunspace) { try { $script:WizRunspace.Close(); $script:WizRunspace.Dispose() } catch { } }
+        $script:WizPSInst = $null; $script:WizRunspace = $null
+    })
+
+    [void]$dlg.ShowDialog()
+}
+
 # --- Workflow runspace ----------------------------------------------------
 $script:Runspace = $null
 $script:PSInst   = $null
@@ -888,6 +1230,8 @@ function Start-Workflow {
         CompletedIcon   = $CompletedIcon
         SerialPanel     = $SerialPanel
         SerialText      = $SerialText
+        HashPanel       = $HashPanel
+        HashPathText    = $HashPathText
         RunButton       = $RunButton
         ActivityBar     = $ActivityBar
         ModeOnline      = $ModeOnline
@@ -933,6 +1277,14 @@ function Start-Workflow {
                 $SerialText.Text         = $Value
                 $SerialPanel.Visibility  = 'Visible'
                 try { [System.Windows.Clipboard]::SetText($Value) } catch { }
+            })
+        }
+        function Show-HashPath {
+            param([string]$Path)
+            if ([string]::IsNullOrWhiteSpace($Path)) { return }
+            $Window.Dispatcher.Invoke([Action]{
+                $HashPathText.Text     = $Path
+                $HashPanel.Visibility  = 'Visible'
             })
         }
         function Restore-Button {
@@ -1101,7 +1453,12 @@ function Start-Workflow {
                         WorkDir = $fidoCacheDir
                         IsoPath = $resolvedIsoPath
                     }
-                    & $BuilderScript @builderArgs 2>&1 | ForEach-Object {
+                    # *>&1 (NOT 2>&1): the builder reports each phase via
+                    # Write-Host (information stream). Inside this runspace
+                    # 2>&1 captures only errors, so the build-phase status
+                    # lines below never fired and the bar appeared frozen
+                    # through the whole DISM apply. *>&1 merges all streams.
+                    & $BuilderScript @builderArgs *>&1 | ForEach-Object {
                         $line = "$_"
                         if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
                         elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }
@@ -1388,6 +1745,7 @@ shutdown /s /f /t 5
 
             if ($collected) {
                 if ($script:CollectedSerial) { Show-Serial -Value $script:CollectedSerial }
+                Show-HashPath -Path $destCsv
                 Set-Done
             } else {
                 Set-Result -Text 'No hash CSV found on the VM. Mount its VHDX and check C:\HWID\collection.log.' -Color '#F03A47'
@@ -1531,6 +1889,18 @@ function Show-CleanupDialog {
 }
 
 $CleanupButton.Add_Click({ Show-CleanupDialog })
+
+# Guided ISO download + parent-VHDX build
+$IsoWizardButton.Add_Click({ Show-Win11IsoWizard })
+
+# "Open folder" under the saved hardware-hash path: select the .csv in Explorer.
+# The path lives in the shared HashPathText element (set from the workflow
+# runspace), so read it from there rather than a cross-runspace variable.
+$HashOpenLink.Add_Click({
+    $p = $HashPathText.Text
+    if ($p -and (Test-Path $p)) { Start-Process explorer.exe "/select,`"$p`"" }
+    elseif ($p) { Start-Process explorer.exe (Split-Path $p) }
+})
 
 # Open Intune AutoPilot devices page in the default browser
 $IntuneButton.Add_Click({
