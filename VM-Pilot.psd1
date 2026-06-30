@@ -1,7 +1,7 @@
 ﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.2.0'
+    ModuleVersion     = '0.3.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -43,6 +43,30 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.3.0
+- New SETUP wizard (green SETUP button in the host GUI): guided steps to
+  download an official Windows 11 multi-edition ISO from Microsoft, then
+  builds the parent VHDX from the ISO you pick. Shows live phase status plus
+  a real apply percentage (from Expand-WindowsImage's progress stream), then
+  prompts "Build your first VM!" and auto-closes on success.
+- Get-Win11VHDX.ps1 auto-detects the Windows release from the ISO image
+  build (26100 -> 24H2, 26200 -> 25H2) and names the VHDX accordingly
+  (C:\VMs\Win11-<release>.vhdx) when -OutVhdx is not pinned. New -PickIso
+  switch opens a native file picker.
+- Safer rebuilds: the builder refuses to delete a parent VHDX any VM depends
+  on (and names the VM) instead of corrupting that VM's differencing disk;
+  otherwise it dismounts and retries. The SETUP wizard also warns up front
+  if a parent VHDX already exists or has dependent VMs.
+- Offline completion now shows where the hardware-hash CSV was saved on the
+  host, with an "Open folder" link that selects the file in Explorer.
+- Windows PowerShell 5.1 compatibility: all bundled scripts are now UTF-8
+  with a BOM, so 5.1 reads them as UTF-8 (no-BOM files were parsed as the
+  legacy Windows-1252 codepage, which broke parsing on non-ASCII characters
+  like em-dashes). Launch via powershell.exe or pwsh.
+- Fix builder-phase progress not advancing: the builder reports phases via
+  Write-Host (information stream), so the in-runspace capture was changed
+  from 2>&1 (errors only) to *>&1 (all streams).
+
 0.2.0
 - New first-time setup dialog. When no cached parent VHDX exists for the
   selected release, the GUI prompts for the ISO source: Download via UUP
