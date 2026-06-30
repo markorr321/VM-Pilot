@@ -59,7 +59,7 @@ What happens next depends on mode:
 | `VM-Pilot.psm1`               | Module entry. Exposes the `Start-VMPilot` cmdlet. |
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
-| `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` to skip download, or falls back to Fido. |
+| `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
 | `Get-UUPDumpISO.ps1`          | UUP Dump helper. Queries `api.uupdump.net`, downloads + runs the conversion pack, produces a fresh Win11 ISO from the Windows Update CDN. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
 | `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
@@ -71,7 +71,9 @@ What happens next depends on mode:
 
 - **Windows 10/11 host** with the Hyper-V role and Hyper-V Manager installed.
 - **Administrator** rights (the launcher auto-elevates via UAC).
-- **PowerShell 7+** preferred (`pwsh.exe`); falls back to Windows PowerShell 5.1.
+- **PowerShell 7+** (`pwsh.exe`) preferred; **Windows PowerShell 5.1**
+  (`powershell.exe`) also supported. See the [PowerShell 5.1 vs 7](#powershell-51-vs-7)
+  note below.
 - **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
   first run (`Install-Module -Scope CurrentUser`).
 - **Parent VHDX** — built automatically on first use of a release. When no
@@ -85,6 +87,13 @@ What happens next depends on mode:
   - **Browse for an existing ISO** — point at a Win11 ISO you already
     have (Visual Studio Subscriptions, VLSC, MSDN, USB stick). Skips the
     UUP Dump conversion entirely (~5-10 min total).
+  - **SETUP wizard (manual ISO from Microsoft)** — the green **SETUP**
+    button opens a guided wizard with the exact click-path to download a
+    Win11 multi-edition ISO from Microsoft's official Software Download
+    page, then builds the parent VHDX from the ISO you pick. The VHDX is
+    auto-named after the release detected inside the ISO and shows a live
+    build percentage; on success it prompts you to build your first VM and
+    closes itself.
   Per-release cache: 24H2 and 25H2 each have their own VHDX, built only
   when their respective release is picked.
 - **Internet** — once per release at first build for UUP files or ISO
@@ -152,13 +161,16 @@ console window, then the host workflow takes over. Equivalent to
 | **GROUP TAG** *(Offline only)*         | Optional. Adds a `Group Tag` column to the CSV. Leave blank to omit.   |
 | **COLLECT HWID** / **COLLECT & UPLOAD** | Label changes with mode. Kicks off the run.                            |
 | **OPEN AUTOPILOT** *(bottom-left)*     | Launches the Intune AutoPilot Devices page in your default browser.    |
+| **SETUP** *(bottom, green)*            | Opens the **Get Windows 11 Install Media** wizard: guided steps to download an official Microsoft ISO, then builds the parent VHDX from the ISO you pick (live percentage, auto-named by the release inside the ISO). Warns first if a parent VHDX already exists or a VM depends on it. |
 | **CLEANUP VMs** *(bottom-right, red)*  | Opens a dialog listing every Hyper-V VM with per-row checkboxes plus Remove Selected / Remove All buttons. Each removal stops the VM, deletes it, and wipes its `C:\VMs\<name>` folder. |
 | **EXIT** *(bottom-right, gray)*        | Closes the GUI.                                                         |
 
 Status text and an indeterminate progress bar show what stage you're at.
 On success, the run renders a centered **Complete** in green plus a
 **DEVICE SERIAL** block — the serial is auto-copied to your clipboard
-ready to paste. Errors render in red in the same slot.
+ready to paste. In Offline mode it also shows a **HARDWARE HASH SAVED TO**
+block with the full CSV path and an **Open folder** link that opens
+Explorer with the file selected. Errors render in red in the same slot.
 
 ## First-run behavior
 
@@ -179,6 +191,28 @@ ready to paste. Errors render in red in the same slot.
   `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
 - **Every subsequent run** — parent VHDX is reused, community script is reused.
   VM creation + boot is the only time spent (~5-10 min total per VM).
+
+## Building media manually (SETUP)
+
+The green **SETUP** button is an on-demand alternative to the auto-triggered
+build dialog — useful for pre-building a parent VHDX, or when you'd rather
+grab the official Microsoft ISO yourself:
+
+1. Click **SETUP** → the **Get Windows 11 Install Media** wizard opens with
+   numbered steps and an **OPEN DOWNLOAD PAGE** button (Microsoft's Software
+   Download page).
+2. Follow the steps to download a **Windows 11 (multi-edition ISO for x64
+   devices)** — choose the product language → Confirm → 64-bit Download.
+3. Click **BUILD VHDX FROM ISO**, pick the `.iso` you saved, and watch the
+   live status: *Mounting ISO… → Detected Windows 11 25H2 → Applying Windows
+   image… NN% → Writing UEFI… → Finalizing*.
+4. The VHDX is auto-named from the release inside the ISO
+   (`C:\VMs\Win11-24H2.vhdx` / `Win11-25H2.vhdx`). On success the wizard
+   shows **Build your first VM!** and closes itself.
+
+If a parent VHDX already exists, SETUP warns before doing anything and names
+any VMs that depend on it (which must be removed via **CLEANUP VMs** before a
+rebuild can replace the parent).
 
 ## In-VM enrollment GUI (Online only)
 
@@ -219,14 +253,39 @@ cached community AutoPilot script. Override the keep list with
 | Offline | `C:\Autopilot HWID Collection\AutoPilotHWID-<serial>.csv` on the host.   |
 | Online  | Imported directly into your Intune tenant; the CSV exists only inside the VM at `C:\HWID\` and is discarded with the VM. |
 
+## PowerShell 5.1 vs 7
+
+VM-Pilot runs under both **Windows PowerShell 5.1** (`powershell.exe`, ships
+in every Windows box) and **PowerShell 7+** (`pwsh.exe`). `VMPilot.bat` and
+`Start-VMPilot` prefer `pwsh` when it's installed and fall back to 5.1.
+
+The one thing to know: the two read script files differently. PowerShell 7
+defaults to **UTF-8**; Windows PowerShell 5.1 defaults to the legacy
+**Windows-1252** codepage *unless the file carries a UTF-8 byte-order mark
+(BOM)*. The bundled `.ps1`/`.psd1`/`.psm1` files contain non-ASCII
+characters (em-dashes, etc.) and are therefore saved **UTF-8 with a BOM** so
+5.1 parses them correctly. Two practical consequences:
+
+- **Launch either way.** `powershell.exe -File .\VMPilot.GUI.ps1` and
+  `pwsh -File .\VMPilot.GUI.ps1` both work.
+- **If you edit a script, keep the BOM.** Some editors/formatters silently
+  re-save UTF-8 *without* a BOM; under 5.1 that reintroduces parser errors
+  on the non-ASCII characters. Save as "UTF-8 with BOM", or just run the
+  edited file under `pwsh`. The in-VM scripts (`AutopilotEnroll.GUI.ps1`,
+  `VMPilotCollect.ps1`) run under the VM's 5.1, so this applies to them too.
+
 ## Troubleshooting
 
 - **VM doesn't boot to OOBE / never auto-shuts-down (Offline)** — mount the
   child VHDX manually and check `C:\HWID\collection.log` for the script's
   output. Usually a hash-collection error.
-- **In-VM `import.bat` shows a parser error** — the in-VM enrollment GUI is
-  intentionally pure-ASCII to avoid Windows PowerShell 5.1 encoding issues.
-  If you edit `AutopilotEnroll.GUI.ps1`, keep it ASCII-only.
+- **A bundled `.ps1` shows a parser error ("missing `}`", "Try is missing
+  its Catch")** — almost always a Windows PowerShell 5.1 encoding problem.
+  The scripts are UTF-8 **with a BOM** so 5.1 reads them correctly; if you
+  edit one and your editor strips the BOM, 5.1 re-reads it as Windows-1252
+  and mis-tokenizes non-ASCII characters (em-dashes, etc.). Fix: re-save the
+  file as **"UTF-8 with BOM"**, or run it under `pwsh` (PowerShell 7). See
+  the PowerShell note below.
 - **Sign-in succeeds but upload returns 403** — your account doesn't have
   the `DeviceManagementServiceConfig.ReadWrite.All` scope granted in your
   tenant. Have an admin grant consent.
@@ -234,9 +293,12 @@ cached community AutoPilot script. Override the keep list with
   `-Assign` flag in the community script invocation. The community script
   needs all three: `-Online -Assign -Reboot`. VM-Pilot ships this combo by
   default; if you've forked the in-VM GUI, double-check.
-- **Cached VHDX is locked** — a previous test VM is still using it as a
-  differencing parent. Stop+remove that VM and its `C:\VMs\<name>\` folder
-  before you can re-build the parent.
+- **Rebuild blocked / cached VHDX is locked** — a test VM is still using
+  the parent as its differencing disk. The builder now refuses to delete a
+  parent any VM depends on (and names the VM in the error) rather than
+  corrupting that VM; remove those VMs via **CLEANUP VMs** first, then
+  rebuild. If it's just attached/mounted in Explorer or Disk Management,
+  close that and rebuild — the builder dismounts and retries on its own.
 
 ## Credits
 
