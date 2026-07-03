@@ -236,7 +236,7 @@ switch (Test-HyperVState) {
 }
 
 # --- Constants ------------------------------------------------------------
-$script:BootSource         = 'C:\VMs\Win11-24H2.vhdx'
+$script:BootSource         = 'C:\VMs\Win11-25H2.vhdx'
 # Prefer the builder vendored in the module folder; fall back to the legacy
 # C:\Tools\WinVHDX\ location for users who installed the script there before
 # the module wrapper existed.
@@ -430,13 +430,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
       <StackPanel Grid.Column="2">
         <TextBlock Text="WIN RELEASE" Style="{StaticResource FieldLabel}"/>
         <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="6"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <RadioButton Grid.Column="0" x:Name="Rel24H2" GroupName="Release" Content="24H2" Style="{StaticResource Segment}"/>
-          <RadioButton Grid.Column="2" x:Name="Rel25H2" GroupName="Release" Content="25H2" IsChecked="True" Style="{StaticResource Segment}"/>
+          <RadioButton x:Name="Rel25H2" GroupName="Release" Content="25H2" IsChecked="True" IsEnabled="False" Style="{StaticResource Segment}"/>
         </Grid>
       </StackPanel>
     </Grid>
@@ -676,8 +670,6 @@ $ResultText     = $window.FindName('ResultText')
 $CompletedIcon  = $window.FindName('CompletedIcon')
 $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
-$Rel24H2        = $window.FindName('Rel24H2')
-$Rel25H2        = $window.FindName('Rel25H2')
 $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
 $SerialPanel    = $window.FindName('SerialPanel')
@@ -766,90 +758,6 @@ function Get-CheckedRadio {
     return $Default
 }
 
-# First-time setup dialog. Runs on the main UI thread (called from
-# Start-Workflow BEFORE the runspace spawns) — that's deliberate.
-# Showing it via Dispatcher.Invoke from inside the workflow runspace
-# leaves the WPF click handlers in a scope context where they silently
-# never fire, even with GetNewClosure(). Doing it inline here is the
-# clean fix. Returns @{ Source = 'UUPDump'|'Browse'|'Cancel'; IsoPath = '' }.
-function Show-IsoSourceDialog {
-    param([string]$ReleaseLabel)
-
-    [xml]$x = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Build Windows VHDX" Width="540" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        Background="#161616" Foreground="#FFFFFF"
-        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
-  <Grid Margin="24">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-    </Grid.RowDefinitions>
-
-    <TextBlock Grid.Row="0" Text="Build Windows VHDX" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,8"/>
-    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,18"
-               Text="No cached parent VHDX for $ReleaseLabel was found. Pick where to source the Windows 11 install media:"/>
-
-    <StackPanel Grid.Row="2" Orientation="Vertical">
-      <Button x:Name="BtnUUPDump" Height="50" Margin="0,0,0,10"
-              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
-              HorizontalContentAlignment="Left" Padding="14,0,0,0">
-        <Button.Content>
-          <StackPanel>
-            <TextBlock Text="Download via UUP Dump  (recommended)"/>
-            <TextBlock Text="Pulls from Windows Update CDN. Works on corporate networks. ~15-20 min."
-                       Foreground="#D0E5FA" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
-          </StackPanel>
-        </Button.Content>
-      </Button>
-      <Button x:Name="BtnBrowse" Height="50" Margin="0,0,0,10"
-              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="13" FontWeight="SemiBold" Cursor="Hand"
-              HorizontalContentAlignment="Left" Padding="14,0,0,0">
-        <Button.Content>
-          <StackPanel>
-            <TextBlock Text="Browse for an existing ISO..."/>
-            <TextBlock Text="Use a Windows 11 ISO you already have (Visual Studio, VLSC, MSDN, USB)."
-                       Foreground="#909090" FontSize="11" FontWeight="Normal" Margin="0,2,0,0"/>
-          </StackPanel>
-        </Button.Content>
-      </Button>
-    </StackPanel>
-
-    <Button Grid.Row="3" x:Name="BtnCancel" Content="CANCEL"
-            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,12,0,0"
-            Background="#1F1F1F" Foreground="#C0C0C0" BorderThickness="0"
-            FontWeight="SemiBold" Cursor="Hand"/>
-  </Grid>
-</Window>
-"@
-    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
-    $dlg.Owner = $window
-    $result = @{ Source = 'Cancel'; IsoPath = '' }
-
-    $dlg.FindName('BtnUUPDump').Add_Click({ $result.Source = 'UUPDump'; $dlg.Close() })
-    $dlg.FindName('BtnBrowse').Add_Click({
-        $ofd = New-Object Microsoft.Win32.OpenFileDialog
-        $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
-        $ofd.Title       = "Pick a Windows 11 $ReleaseLabel ISO"
-        $ofd.Multiselect = $false
-        if ($ofd.ShowDialog($dlg)) {
-            $result.Source  = 'Browse'
-            $result.IsoPath = $ofd.FileName
-            $dlg.Close()
-        }
-    })
-    $dlg.FindName('BtnCancel').Add_Click({ $result.Source = 'Cancel'; $dlg.Close() })
-
-    [void]$dlg.ShowDialog()
-    return $result
-}
-
 # Guided "Get Windows ISO" wizard. Walks the user through downloading a
 # Windows 11 ISO from Microsoft's official page, then runs the builder on
 # the ISO they picked (same code path as Get-Win11VHDX.ps1 -PickIso — the
@@ -859,8 +767,9 @@ function Show-IsoSourceDialog {
 # mirroring Start-Workflow. The file picker runs here on the UI thread
 # (owned by this window) rather than inside the runspace, so it can't pop
 # up behind the wizard.
-$script:WizRunspace = $null
-$script:WizPSInst   = $null
+$script:WizRunspace  = $null
+$script:WizPSInst    = $null
+$script:WizApplyTimer = $null
 function Show-Win11IsoWizard {
     $downloadUrl = 'https://www.microsoft.com/en-us/software-download/windows11'
 
@@ -888,9 +797,9 @@ function Show-Win11IsoWizard {
     <Border Grid.Row="2" Background="#1B1B1B" CornerRadius="8" Padding="16,14" Margin="0,0,0,18">
       <StackPanel>
         <TextBlock Text="1.  Click OPEN DOWNLOAD PAGE below." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, choose &quot;Windows 11 (multi-edition ISO for x64 devices)&quot;, then click Download." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="3.  Select the product language, then click Confirm." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="4.  Click the &quot;64-bit Download&quot; button and save the .iso file." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, pick &quot;Windows 11 (multi-edition ISO for x64 devices)&quot; from the drop-down, then click Download." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="3.  In &quot;Select the product language&quot;, choose your language and click Confirm. (The page won't download yet - it prepares your link.)" Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
+        <TextBlock Text="4.  Click the &quot;64-bit Download&quot; button that now appears and save the .iso file. (The link is valid for 24 hours.)" Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
         <TextBlock Text="5.  Once the download is complete, come back here, click BUILD VHDX FROM ISO, pick the file you saved, and wait for the build to finish." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap"/>
       </StackPanel>
     </Border>
@@ -1018,11 +927,12 @@ function Show-Win11IsoWizard {
         $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#C0C0C0'; $wizStatus.Text = 'Starting build…'
         $wizBar.Visibility = 'Visible'; $wizBar.IsIndeterminate = $true
 
-        # Shared, in-process flag the runspace flips true only while
-        # Expand-WindowsImage is applying. The Progress-stream handler (below)
-        # honours percentage updates only during that window, so unrelated
-        # progress (e.g. Format-Volume) can't hijack the apply bar.
-        $wizState = [hashtable]::Synchronized(@{ Applying = $false })
+        # Shared state between the build runspace and the UI-thread apply timer.
+        # Applying is flipped true only while Expand-WindowsImage runs; the timer
+        # (below) polls ApplyDrive's used space against ApplyTotal for a real %
+        # during that window. The builder fills ApplyDrive/ApplyTotal via its
+        # "Apply target: <drive> <bytes>" line just before the apply.
+        $wizState = [hashtable]::Synchronized(@{ Applying = $false; ApplyDrive = ''; ApplyTotal = [double]0 })
 
         $shared = @{
             Window        = $dlg
@@ -1042,28 +952,31 @@ function Show-Win11IsoWizard {
         $ps = [powershell]::Create(); $ps.Runspace = $rs
         $script:WizRunspace = $rs; $script:WizPSInst = $ps
 
-        # Expand-WindowsImage (the long apply step) reports real progress via
-        # the PowerShell progress stream, which *>&1 does NOT capture. Subscribe
-        # to the runspace's Progress stream to drive a true percentage on the
-        # bar + status during the apply. Fires on a background thread, so marshal
-        # to the dialog through its Dispatcher.
-        $ps.Streams.Progress.add_DataAdded({
-            param($s, $e)
+        # Drive the apply percentage from a UI-thread timer. Expand-WindowsImage
+        # reports progress through DISM's native callback, which does NOT land on
+        # the runspace progress stream, so we can't read a % from the cmdlet.
+        # Instead, once the builder announces its "Apply target: <drive> <bytes>",
+        # poll that volume's used space against the total apply size every 1.5s
+        # while Applying is true. Runs on the UI thread, so it touches $wizBar /
+        # $wizStatus directly (no Dispatcher marshalling needed).
+        $applyTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $applyTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
+        $applyTimer.add_Tick({
             try {
-                if (-not $wizState.Applying) { return }
-                $rec = $s[$e.Index]
-                if ($null -eq $rec) { return }
-                $pct = [int]$rec.PercentComplete
-                if ($pct -lt 0 -or $pct -gt 100) { return }
-                $dlg.Dispatcher.Invoke([Action]{
-                    $wizBar.IsIndeterminate = $false
-                    $wizBar.Maximum = 100
-                    $wizBar.Value   = $pct
-                    $wizStatus.Text = "Applying Windows image... $pct%"
-                    $wizStatus.Foreground = '#C0C0C0'
-                })
+                if (-not $wizState.Applying -or -not $wizState.ApplyDrive -or $wizState.ApplyTotal -le 0) { return }
+                $vol = Get-Volume -DriveLetter $wizState.ApplyDrive -ErrorAction SilentlyContinue
+                if (-not $vol) { return }
+                $used = [double]($vol.Size - $vol.SizeRemaining)
+                $pct  = [int][Math]::Max(1, [Math]::Min(99, ($used / $wizState.ApplyTotal) * 100))
+                $wizBar.IsIndeterminate = $false
+                $wizBar.Maximum = 100
+                $wizBar.Value   = $pct
+                $wizStatus.Text = "Applying Windows image... $pct%"
+                $wizStatus.Foreground = '#C0C0C0'
             } catch { }
         })
+        $applyTimer.Start()
+        $script:WizApplyTimer = $applyTimer
 
         $build = {
             function WSet { param([string]$t, [string]$c = '#C0C0C0')
@@ -1117,6 +1030,7 @@ function Show-Win11IsoWizard {
                     elseif ($line -match 'Output VHDX name set from image: (.+)$') { $script:builtPath = $Matches[1].Trim(); WSet "Target: $script:builtPath" }
                     elseif ($line -match 'Using image index')                  { WSet 'Reading install image…' }
                     elseif ($line -match 'Creating .*GB, dynamic')             { WSet 'Creating empty VHDX…'; WBar -1 }
+                    elseif ($line -match '^Apply target: (\w) (\d+)')          { $WizState.ApplyDrive = $Matches[1]; $WizState.ApplyTotal = [double]$Matches[2] }
                     elseif ($line -match 'Applying image')                     { WSet 'Applying Windows image... 0%'; WBar 0; $WizState.Applying = $true }
                     elseif ($line -match 'DISM apply verified')                { $WizState.Applying = $false; WSet 'DISM apply verified - install.wim extracted cleanly.'; WBar -1 }
                     elseif ($line -match 'Writing UEFI')                       { WSet 'Writing UEFI boot files…' }
@@ -1140,6 +1054,7 @@ function Show-Win11IsoWizard {
 
     $btnClose.Add_Click({ $dlg.Close() })
     $dlg.Add_Closing({
+        if ($script:WizApplyTimer) { try { $script:WizApplyTimer.Stop() } catch { }; $script:WizApplyTimer = $null }
         if ($script:WizPSInst)   { try { $script:WizPSInst.Stop() | Out-Null; $script:WizPSInst.Dispose() } catch { } }
         if ($script:WizRunspace) { try { $script:WizRunspace.Close(); $script:WizRunspace.Dispose() } catch { } }
         $script:WizPSInst = $null; $script:WizRunspace = $null
@@ -1158,11 +1073,8 @@ function Start-Workflow {
     $ramGB    = Get-CheckedRadio -Values 4,8,16  -Prefix 'Ram' -Default 4
     $online   = [bool]$ModeOnline.IsChecked
     $groupTag = $GroupTagBox.Text.Trim()
-    # WIN RELEASE picker. Per-release VHDX cache so each release has its
-    # own parent. UUP Dump (preferred source) accepts both 24H2 and 25H2,
-    # so the picker is real again — different from the Fido-only era where
-    # only Latest worked.
-    $release    = if ($Rel24H2.IsChecked) { '24H2' } else { '25H2' }
+    # WIN RELEASE is fixed at 25H2 — the only supported Windows 11 release.
+    $release    = '25H2'
     $bootSource = "C:\VMs\Win11-$release.vhdx"
 
     if ([string]::IsNullOrWhiteSpace($vmName)) {
@@ -1170,20 +1082,19 @@ function Start-Workflow {
         return
     }
 
-    # If no cached VHDX for this release exists, ask the user how to source
-    # the ISO before spawning the runspace. Done on the UI thread because
-    # WPF click handlers misbehave when shown via Dispatcher.Invoke from
-    # inside the workflow runspace.
-    $isoSource = $null
-    $isoPath   = $null
+    # If no cached parent VHDX exists yet, send the user through the guided
+    # "Get Windows 11 Install Media" wizard (download the ISO from Microsoft's
+    # official page, then build the VHDX from it). The wizard is modal and
+    # self-contained; it names the VHDX C:\VMs\Win11-<release>.vhdx. When it
+    # returns, re-check — if the VHDX still isn't there the user cancelled or
+    # the build failed, so bail before spawning the VM-creation runspace.
     if (-not (Test-Path $bootSource -PathType Leaf)) {
-        $choice = Show-IsoSourceDialog -ReleaseLabel $release
-        if (-not $choice -or $choice.Source -eq 'Cancel') {
-            Set-Status -Text 'Cancelled.'
+        Set-Status -Text 'No 25H2 parent VHDX yet — opening the Windows 11 install-media wizard…'
+        Show-Win11IsoWizard
+        if (-not (Test-Path $bootSource -PathType Leaf)) {
+            Set-Status -Text 'Parent VHDX not built — cancelled.'
             return
         }
-        $isoSource = $choice.Source
-        $isoPath   = $choice.IsoPath
     }
 
     Hide-CompletedIcon
@@ -1210,8 +1121,6 @@ function Start-Workflow {
         Release             = $release
         ScriptDir           = $PSScriptRoot
         BootSource      = $bootSource            # per-release override
-        IsoSource       = $isoSource             # 'UUPDump' / 'Browse' / $null (cached)
-        IsoPath         = $isoPath               # only set when IsoSource = 'Browse'
         BuilderScript   = $script:BuilderScript
         VMPath          = $script:VMPath
         FilesToCopy     = $script:FilesToCopy
@@ -1314,186 +1223,15 @@ function Start-Workflow {
 
         try {
             # ===== VHDX template =====
-            if (Test-Path $BootSource -PathType Leaf) {
-                Set-Status 'VHDX template ready (cached)'
-            } else {
-                if (-not (Test-Path $BuilderScript)) {
-                    Set-Result -Text "VHDX template missing and Get-Win11VHDX.ps1 not found at $BuilderScript." -Color '#F03A47'
-                    Restore-Button
-                    return
-                }
-
-                # The user's ISO source was picked on the UI thread before this
-                # runspace spawned (see Show-IsoSourceDialog at script scope).
-                # We receive the result in $IsoSource + $IsoPath via sharedVars.
-                if (-not $IsoSource) {
-                    Set-Result -Text 'Internal error: no IsoSource provided.' -Color '#F03A47'
-                    Restore-Button
-                    return
-                }
-
-                $fidoCacheDir = 'C:\Tools\WinVHDX'
-                if (-not (Test-Path $fidoCacheDir)) {
-                    New-Item -Path $fidoCacheDir -ItemType Directory -Force | Out-Null
-                }
-
-                # Resolve the local ISO path to feed the builder. UUPDump path
-                # invokes the helper here in the runspace; Browse already has
-                # the path from the file picker that ran on the UI thread.
-                $resolvedIsoPath = $null
-
-                if ($IsoSource -eq 'UUPDump') {
-                    $uupHelper = Join-Path $ScriptDir 'Get-UUPDumpISO.ps1'
-                    if (-not (Test-Path $uupHelper)) {
-                        Set-Result -Text "Get-UUPDumpISO.ps1 not found at $uupHelper. Reinstall the module." -Color '#F03A47'
-                        Restore-Button
-                        return
-                    }
-                    Set-Status 'Starting UUP Dump download (~15-20 min)…'
-                    try {
-                        # *>&1 merges every stream (including Information /
-                        # Write-Host) into the pipeline. With plain 2>&1, the
-                        # helper's [UUP] status lines (which use Write-Host)
-                        # never reach this parser and the GUI appears frozen
-                        # for the entire 15-20 min build.
-                        $uupOutput = & $uupHelper -Release $Release *>&1 | ForEach-Object {
-                            $line = "$_"
-                            # Phase markers (status + reset bar to indeterminate)
-                            if     ($line -match '^\[UUP\] Querying')                          { Set-Status 'Querying UUP Dump for latest build…'; Set-Progress -1 }
-                            elseif ($line -match '^\[UUP\] Selected build: (.+)$')             { Set-Status "Selected build: $($Matches[1])" }
-                            elseif ($line -match '^\[UUP\] Downloading conversion script pack'){ Set-Status 'Downloading UUP Dump conversion pack…' }
-                            elseif ($line -match '^\[UUP\] Patching')                          { Set-Status 'Patching conversion config…' }
-                            elseif ($line -match '^\[UUP\] Running conversion')                { Set-Status 'Converting UUP files to ISO (~5 GB from Windows Update, 15-20 min)…'; Set-Progress -1 }
-                            elseif ($line -match '^\[UUP\] ISO created')                       { Set-Status 'UUP Dump ISO ready — building VHDX…'; Set-Progress -1 }
-                            elseif ($line -match '^Downloading aria2c')                        { Set-Status 'Downloading aria2c…' }
-                            elseif ($line -match '^Verifying aria2c')                          { Set-Status 'Verifying aria2c…' }
-                            elseif ($line -match '^Downloading the UUP converter')             { Set-Status 'Downloading UUP converter…' }
-                            elseif ($line -match '^Extracting UUP converter')                  { Set-Status 'Extracting UUP converter…' }
-                            elseif ($line -match '^Retrieving aria2 script for Microsoft Store') { Set-Status 'Preparing Microsoft Store Apps download…' }
-                            elseif ($line -match '^Downloading Microsoft Store Apps')          { Set-Status 'Downloading Microsoft Store Apps…' }
-                            elseif ($line -match '^=== Detecting UUP editions')                { Set-Status 'Detecting UUP editions…' }
-                            elseif ($line -match '^=== Running UUP Converter')                 { Set-Status 'Starting UUP Converter…' }
-                            elseif ($line -match '^=== Parsing Apps CompDB')                   { Set-Status 'Parsing apps database…' }
-                            elseif ($line -match '^=== Preparing Reference ESDs')              { Set-Status 'Preparing reference ESDs…' }
-                            elseif ($line -match '^=== Creating install.wim')                  { Set-Status 'Building install.wim (LZX compress, slowest single step)…'; Set-Progress 0 }
-                            elseif ($line -match '^=== Creating Setup Media Layout')           { Set-Status 'Creating setup media layout…'; Set-Progress -1 }
-                            elseif ($line -match '^=== Updating install.wim')                  { Set-Status 'Integrating updates into install.wim…'; Set-Progress -1 }
-                            elseif ($line -match '^Building ISO')                              { Set-Status 'Building ISO image…'; Set-Progress -1 }
-                            # ----- Real percentage extraction -----
-                            # aria2c single-file progress, e.g.:
-                            #   [#745648 2.5GiB/4.6GiB(54%) CN:16 DL:105MiB ETA:20s]
-                            elseif ($line -match '^\[#[a-f0-9]+\s+([\d.]+)(GiB|MiB)/([\d.]+)(GiB|MiB)\((\d+)%\)') {
-                                $cur = $Matches[1] + ' ' + $Matches[2]
-                                $tot = $Matches[3] + ' ' + $Matches[4]
-                                $pct = [int]$Matches[5]
-                                Set-Status "Downloading UUP files… $pct%  ($cur / $tot)"
-                                Set-Progress $pct
-                            }
-                            # LZX install.wim build, e.g.:
-                            #   Archiving file data: 2902 MiB of 7100 MiB (40%) done
-                            elseif ($line -match '^Archiving file data:\s+(\d+) MiB of (\d+) MiB \((\d+)%\)') {
-                                $pct = [int]$Matches[3]
-                                Set-Status "Building install.wim… $pct%  ($($Matches[1]) / $($Matches[2]) MiB)"
-                                Set-Progress $pct
-                            }
-                            $line
-                        }
-                        $resolvedIsoPath = ($uupOutput | Where-Object { $_ -match '\.iso$' -and (Test-Path "$_") } | Select-Object -Last 1)
-                        if (-not $resolvedIsoPath) {
-                            throw 'UUP Dump helper completed but did not return a valid ISO path.'
-                        }
-                    } catch {
-                        Set-Result -Text "UUP Dump download failed: $($_.Exception.Message)" -Color '#F03A47'
-                        Restore-Button
-                        return
-                    }
-                } elseif ($IsoSource -eq 'Browse') {
-                    if (-not (Test-Path $IsoPath)) {
-                        Set-Result -Text "Selected ISO not found: $IsoPath" -Color '#F03A47'
-                        Restore-Button
-                        return
-                    }
-                    $resolvedIsoPath = $IsoPath
-                    Set-Status "Using ISO: $resolvedIsoPath"
-                } else {
-                    Set-Result -Text "Unknown ISO source '$IsoSource'." -Color '#F03A47'
-                    Restore-Button
-                    return
-                }
-
-                Set-Status 'Building Windows VHDX template…'
-
-                # Pre-flight before invoking the builder: kill any orphan
-                # processes that might lock the VHDX or its source files,
-                # and ensure any prior version of the parent VHDX isn't
-                # still mounted. Without this, the builder can fail mid-way
-                # with file-lock errors that leave a half-built VHDX.
-                Get-Process wimserv, wimlib-imagex, dism, '7zr' -EA SilentlyContinue |
-                    Stop-Process -Force -EA SilentlyContinue
-                if (Test-Path $BootSource) {
-                    $existingVhd = Get-VHD -Path $BootSource -EA SilentlyContinue
-                    if ($existingVhd -and $existingVhd.Attached) {
-                        Set-Status 'Dismounting prior parent VHDX before rebuild…'
-                        Dismount-VHD -Path $BootSource -EA SilentlyContinue
-                        Start-Sleep -Seconds 1
-                    }
-                }
-
-                try {
-                    # HASHTABLE splat — not @() array splat. Array splatting
-                    # passes the items as POSITIONAL args, so '-Release' was
-                    # being assigned to $Release (first positional param)
-                    # which then failed the [ValidateSet('24H2','25H2')] with
-                    # "The argument '-Release' does not belong to the set".
-                    # Hashtable splatting passes them as -Name Value pairs.
-                    $builderArgs = @{
-                        Release = $Release
-                        Edition = 'Pro'
-                        OutVhdx = $BootSource
-                        WorkDir = $fidoCacheDir
-                        IsoPath = $resolvedIsoPath
-                    }
-                    # *>&1 (NOT 2>&1): the builder reports each phase via
-                    # Write-Host (information stream). Inside this runspace
-                    # 2>&1 captures only errors, so the build-phase status
-                    # lines below never fired and the bar appeared frozen
-                    # through the whole DISM apply. *>&1 merges all streams.
-                    & $BuilderScript @builderArgs *>&1 | ForEach-Object {
-                        $line = "$_"
-                        if     ($line -match 'Fetching Fido')               { Set-Status 'Fetching Fido…' }
-                        elseif ($line -match 'Resolving ISO URL')           { Set-Status 'Resolving Microsoft ISO URL…' }
-                        elseif ($line -match 'Downloading ISO')             { Set-Status 'Downloading Windows ISO (~5 GB, slow)…'; Set-Progress 0 }
-                        elseif ($line -match '^ISO progress: (\d+)% \((\d+) / (\d+) MB\)') {
-                            $pct = [int]$Matches[1]
-                            Set-Status "Downloading Windows ISO… $pct%  ($($Matches[2]) / $($Matches[3]) MB)"
-                            Set-Progress $pct
-                        }
-                        elseif ($line -match '^ISO progress: 100%') {
-                            Set-Status 'Windows ISO downloaded.'
-                            Set-Progress 100
-                        }
-                        elseif ($line -match 'Using supplied ISO')          { Set-Status 'Using supplied ISO…' }
-                        elseif ($line -match 'Reusing existing ISO')        { Set-Status 'ISO cached — preparing…' }
-                        elseif ($line -match 'Mounting ISO')                { Set-Status 'Mounting ISO…'; Set-Progress -1 }
-                        elseif ($line -match 'Using image index')           { Set-Status 'Reading install image…' }
-                        elseif ($line -match 'Creating .*GB, dynamic')      { Set-Status 'Creating empty VHDX…' }
-                        elseif ($line -match 'Applying image')              { Set-Status 'Applying Windows image (slow)…' }
-                        elseif ($line -match 'DISM apply verified')         { Set-Status 'DISM apply verified — install.wim extracted cleanly' }
-                        elseif ($line -match 'Writing UEFI')                { Set-Status 'Writing UEFI boot files…' }
-                        elseif ($line -match 'Boot files verified')         { Set-Status 'UEFI boot files verified — VHDX is bootable' }
-                        elseif ($line -match 'Dismounting')                 { Set-Status 'Finalizing VHDX…' }
-                    }
-                } catch {
-                    Set-Result -Text "VHDX build failed: $($_.Exception.Message)" -Color '#F03A47'
-                    Restore-Button
-                    return
-                }
-                if (-not (Test-Path $BootSource -PathType Leaf)) {
-                    Set-Result -Text "Builder finished but no VHDX appeared at $BootSource." -Color '#F03A47'
-                    Restore-Button
-                    return
-                }
+            # The parent VHDX is built up-front via the "Get Windows 11 Install
+            # Media" wizard (Show-Win11IsoWizard) on the UI thread before this
+            # runspace spawns, so by now it must exist. Guard defensively.
+            if (-not (Test-Path $BootSource -PathType Leaf)) {
+                Set-Result -Text "Parent VHDX not found: $BootSource. Build it first via SETUP." -Color '#F03A47'
+                Restore-Button
+                return
             }
+            Set-Status 'VHDX template ready (cached)'
 
             # ===== Create VM =====
             # Free any lingering handles on the parent VHDX before creating a

@@ -1,7 +1,7 @@
 ﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.3.0'
+    ModuleVersion     = '0.4.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -30,7 +30,6 @@
         'VMPilotCollect.ps1',
         'AutopilotEnroll.GUI.ps1',
         'Get-Win11VHDX.ps1',
-        'Get-UUPDumpISO.ps1',
         'Reset-VMPilot.ps1',
         'VMPilot.bat',
         'README.md'
@@ -43,6 +42,18 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.4.0
+- 25H2 only. Dropped 24H2 as a selectable Windows 11 release. The WIN
+  RELEASE segment is fixed at 25H2, the -Release parameter on the builder
+  accepts only 25H2, and Get-Win11VHDX.ps1 rejects a 24H2 (build 26100)
+  ISO instead of building a VHDX the GUI would never load.
+- Removed the UUP Dump download path and the bundled Get-UUPDumpISO.ps1
+  helper. When no cached parent VHDX exists, the GUI now sends you straight
+  to the "Get Windows 11 Install Media" wizard: download the official ISO
+  from https://www.microsoft.com/en-us/software-download/windows11, then
+  build the parent VHDX from it. Once the wizard finishes, the pending VM
+  build continues automatically.
+
 0.3.0
 - New SETUP wizard (green SETUP button in the host GUI): guided steps to
   download an official Windows 11 multi-edition ISO from Microsoft, then

@@ -9,9 +9,8 @@ AutoPilot from inside the VM via Andrew Taylor's community script (Online).
 On first launch, VM-Pilot checks Hyper-V is enabled (and offers to enable
 it + reboot if not). Then a single button-click in the host GUI:
 
-1. **Builds** a Windows 11 parent VHDX (one-time per release, cached) via
+1. **Builds** a Windows 11 **25H2** parent VHDX (one-time, cached) via
    the bundled `Get-Win11VHDX.ps1` so you don't supply or maintain a template.
-   Pick **24H2** or **25H2** in the GUI's WIN RELEASE segment.
 2. **Creates** a differencing-disk child VM in Hyper-V via the
    `HyperV.VMFactory` PowerShell module — Gen 2, Secure Boot, vTPM, Default Switch.
 3. **Injects** mode-specific payload into the child VHDX *before* first boot.
@@ -60,7 +59,6 @@ What happens next depends on mode:
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
 | `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
-| `Get-UUPDumpISO.ps1`          | UUP Dump helper. Queries `api.uupdump.net`, downloads + runs the conversion pack, produces a fresh Win11 ISO from the Windows Update CDN. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
 | `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
 | `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and cached community script for a clean re-run. |
@@ -76,28 +74,20 @@ What happens next depends on mode:
   note below.
 - **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
   first run (`Install-Module -Scope CurrentUser`).
-- **Parent VHDX** — built automatically on first use of a release. When no
-  cached VHDX exists for the picked release, the GUI shows a setup dialog:
-  - **Download via UUP Dump (recommended)** — pulls UUP files from the
-    Windows Update CDN (`*.delivery.mp.microsoft.com`), assembles a Win11
-    ISO via UUP Dump's converter, DISM-applies to
-    `C:\VMs\Win11-<release>.vhdx`. ~15-20 min on most hardware. Works on
-    corporate networks where the public Software Download endpoint is
-    blocked, because Windows Update has to work for the machine.
-  - **Browse for an existing ISO** — point at a Win11 ISO you already
-    have (Visual Studio Subscriptions, VLSC, MSDN, USB stick). Skips the
-    UUP Dump conversion entirely (~5-10 min total).
-  - **SETUP wizard (manual ISO from Microsoft)** — the green **SETUP**
-    button opens a guided wizard with the exact click-path to download a
-    Win11 multi-edition ISO from Microsoft's official Software Download
-    page, then builds the parent VHDX from the ISO you pick. The VHDX is
-    auto-named after the release detected inside the ISO and shows a live
-    build percentage; on success it prompts you to build your first VM and
-    closes itself.
-  Per-release cache: 24H2 and 25H2 each have their own VHDX, built only
-  when their respective release is picked.
-- **Internet** — once per release at first build for UUP files or ISO
-  download, and from inside the VM during Online enrollment so it can
+- **Parent VHDX** — built automatically on first use. When no cached
+  `C:\VMs\Win11-25H2.vhdx` exists, the GUI opens the **Get Windows 11
+  Install Media** wizard:
+  - Guided click-path to download the official **Windows 11 (multi-edition
+    ISO for x64 devices)** from Microsoft's Software Download page
+    (`https://www.microsoft.com/en-us/software-download/windows11`).
+  - Click **BUILD VHDX FROM ISO**, pick the `.iso` you saved, and the
+    builder DISM-applies it to `C:\VMs\Win11-25H2.vhdx` with a live apply
+    percentage. A non-25H2 ISO (e.g. 24H2) is rejected.
+  - Once the wizard finishes, the pending VM build continues automatically.
+  You can also open this wizard any time with the green **SETUP** button to
+  pre-build the parent VHDX. The 25H2 VHDX is built once and reused.
+- **Internet** — once at first build to download the Windows 11 ISO,
+  and from inside the VM during Online enrollment so it can
   reach Microsoft Graph.
 - **Intune admin account** (Online mode only) with consent for
   `Device.ReadWrite.All`, `DeviceManagementManagedDevices.ReadWrite.All`,
@@ -107,11 +97,11 @@ What happens next depends on mode:
 ## Licensing & redistribution
 
 VM-Pilot is MIT-licensed code that **does not include or redistribute any
-Microsoft software**. On first run, the bundled helper (`Get-UUPDumpISO.ps1`
-via [UUP Dump](https://uupdump.net), or `Get-Win11VHDX.ps1` with Fido as a
-fallback) downloads Windows install media directly from Microsoft's own
-servers (Windows Update CDN or the public Software Download page) to your
-machine. Microsoft sees you as the downloader, not VM-Pilot or this repo.
+Microsoft software**. You download the Windows 11 ISO yourself from
+Microsoft's official [Software Download page](https://www.microsoft.com/en-us/software-download/windows11)
+(the SETUP wizard walks you through it), and `Get-Win11VHDX.ps1` DISM-applies
+that ISO to a local VHDX. Microsoft sees you as the downloader, not VM-Pilot
+or this repo.
 
 You are responsible for ensuring your Windows licensing covers the VMs you
 create. For short-lived test/eval VMs that exist only long enough to grab a
@@ -154,7 +144,7 @@ console window, then the host workflow takes over. Equivalent to
 | Field                                  | Notes                                                                  |
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | **MODE** — Offline / Online            | Selects which payload to inject into the VM.                            |
-| **WIN RELEASE** — 24H2 / 25H2          | Which Windows 11 build to use. Per-release parent VHDX cache.            |
+| **WIN RELEASE** — 25H2                  | Windows 11 build used. Fixed at 25H2 (cached parent VHDX).               |
 | **VM NAME**                            | Hyper-V VM name. Must not collide with an existing VM.                   |
 | **CPU CORES** — 1 / 2 / 4              | Defaults to 2. Bump to 4 for faster boot.                                 |
 | **RAM (GB)** — 4 / 8 / 16              | Defaults to 4. Bump to 8 for faster boot.                                 |
@@ -179,14 +169,11 @@ Explorer with the file selected. Errors render in red in the same slot.
   **ENABLE HYPER-V** runs `dism.exe` in the background (1–3 minutes with an
   animated progress bar), then a **Reboot Required** dialog. After reboot,
   run `Start-VMPilot` again and the check passes silently.
-- **First click of COLLECT HWID for a given release** — if no cached parent
-  VHDX exists at `C:\VMs\Win11-<release>.vhdx`, the **Build Windows VHDX**
-  dialog appears with two options:
-  - **Download via UUP Dump (recommended)** — ~15-20 min, status text
-    updates throughout (Downloading UUP files… 54%, Building install.wim…
-    62%, etc.)
-  - **Browse for an existing ISO** — ~5-10 min, skips UUP Dump entirely
-  Each release (24H2, 25H2) builds independently and caches separately.
+- **First click of COLLECT HWID** — if no cached parent VHDX exists at
+  `C:\VMs\Win11-25H2.vhdx`, the **Get Windows 11 Install Media** wizard
+  opens: download the official ISO from Microsoft, then **BUILD VHDX FROM
+  ISO** (~5-10 min, live apply percentage). When it finishes, the VM build
+  continues automatically. The 25H2 parent VHDX is built once and cached.
 - **First Online run** — VM-Pilot also downloads
   `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
 - **Every subsequent run** — parent VHDX is reused, community script is reused.
@@ -207,8 +194,8 @@ grab the official Microsoft ISO yourself:
    live status: *Mounting ISO… → Detected Windows 11 25H2 → Applying Windows
    image… NN% → Writing UEFI… → Finalizing*.
 4. The VHDX is auto-named from the release inside the ISO
-   (`C:\VMs\Win11-24H2.vhdx` / `Win11-25H2.vhdx`). On success the wizard
-   shows **Build your first VM!** and closes itself.
+   (`C:\VMs\Win11-25H2.vhdx`). A non-25H2 ISO (e.g. 24H2) is rejected. On
+   success the wizard shows **Build your first VM!** and closes itself.
 
 If a parent VHDX already exists, SETUP warns before doing anything and names
 any VMs that depend on it (which must be removed via **CLEANUP VMs** before a
@@ -307,9 +294,7 @@ characters (em-dashes, etc.) and are therefore saved **UTF-8 with a BOM** so
   https://github.com/andrew-s-taylor/WindowsAutopilotInfo
 - **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
   https://github.com/SasStu/HyperV.VMFactory
-- **Windows ISO via Windows Update CDN** — UUP Dump:
-  https://uupdump.net
-- **ISO download resolver (fallback)** — Pete Batard's Fido:
+- **ISO download resolver (CLI fallback)** — Pete Batard's Fido:
   https://github.com/pbatard/Fido
 - **Original CLI workflow that this replaced** —
   https://github.com/markorr321/HyperPilot-Offline-HWID-Collection-Workflow

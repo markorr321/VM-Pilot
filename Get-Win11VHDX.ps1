@@ -1,7 +1,7 @@
 ﻿
 <#
 .SYNOPSIS
-  Downloads a Windows 11 ISO (24H2 or 25H2, current channel) and builds a Gen-2/UEFI VHDX.
+  Downloads a Windows 11 ISO (25H2, current channel) and builds a Gen-2/UEFI VHDX.
 
 .EXAMPLE
   .\Get-Win11VHDX.ps1 -Release 25H2 -Edition Pro -OutVhdx C:\VMs\Win11-25H2.vhdx
@@ -14,7 +14,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('24H2','25H2')] [string]$Release  = '25H2',
+    [ValidateSet('25H2')]        [string]$Release  = '25H2',
     [ValidateSet('Home','Pro')]  [string]$Edition  = 'Pro',
     [string]$Language = 'English',
     [int]   $SizeGB   = 64,
@@ -22,7 +22,7 @@ param(
     [string]$OutVhdx  = "C:\VMs\Win11-$Release.vhdx",
     # Pre-supplied ISO. If provided, skips Fido + download entirely and
     # DISM-applies the existing file. Lets the GUI feed an ISO from any
-    # source (UUP Dump, Visual Studio, VLSC, USB drive, etc.).
+    # source (Microsoft Software Download page, Visual Studio, VLSC, USB, etc.).
     [string]$IsoPath,
     # Pop a Windows "Open file" dialog to pick the ISO interactively. Sets
     # $IsoPath from whatever the user selects, then follows the same
@@ -83,7 +83,7 @@ if (-not (Test-Path $fido)) {
 }
 
 # --- Resolve ISO --------------------------------------------------------
-# If -IsoPath was supplied (e.g. from UUP Dump or a hand-picked file), use
+# If -IsoPath was supplied (e.g. a hand-picked ISO from the SETUP wizard), use
 # that and skip the Fido + download flow entirely.
 if ($IsoPath) {
     if (-not (Test-Path $IsoPath -PathType Leaf)) {
@@ -157,6 +157,22 @@ if (-not (Test-Path $iso)) {
     Write-Host "Reusing existing ISO: $iso"
 }
 
+# --- Suppress shell popups for the duration of the build ----------------
+# Mounting the ISO and partitioning/formatting the fresh VHDX both make the
+# Windows shell pop dialogs: AutoPlay when the ISO gets a drive letter, and
+# "You need to format the disk in drive X:" for the raw VHDX volumes. Those
+# popups steal focus and can interrupt Format-Volume mid-build (the failure
+# seen when building from the GUI wizard). Stop Shell Hardware Detection --
+# the service behind AutoPlay and the format prompt -- for the whole build
+# and restore it in the finally block below, so it always comes back even if
+# the build throws. `mountvol /N` (further down) adds belt-and-suspenders
+# against auto-lettering races during partitioning.
+$shellHW           = Get-Service -Name ShellHWDetection -ErrorAction SilentlyContinue
+$shellHWWasRunning = [bool]($shellHW -and $shellHW.Status -eq 'Running')
+
+try {
+if ($shellHWWasRunning) { Stop-Service -Name ShellHWDetection -Force -ErrorAction SilentlyContinue }
+
 # --- Mount ISO and locate install.wim/esd -------------------------------
 Write-Host "Mounting ISO..."
 $isoMount  = Mount-DiskImage -ImagePath $iso -PassThru
@@ -187,7 +203,10 @@ Write-Host "Using image index $($imgInfo.ImageIndex): $($imgInfo.ImageName)"
 # control of naming; this auto-naming only kicks in on direct invocation.
 $imgDetail = Get-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex
 $imgBuild  = ([Version]$imgDetail.Version).Build
-$buildToRelease = @{ 26100 = '24H2'; 26200 = '25H2' }
+if ($imgBuild -eq 26100) {
+    throw "This ISO is Windows 11 24H2 (build 26100). VM-Pilot only supports 25H2 (build 26200) - please supply a 25H2 ISO."
+}
+$buildToRelease = @{ 26200 = '25H2' }
 $detectedRelease = $buildToRelease[$imgBuild]
 if ($detectedRelease) {
     Write-Host "Detected Windows 11 $detectedRelease (build $imgBuild) in image."
@@ -293,6 +312,14 @@ $winLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $win.Parti
 Format-Volume -DriveLetter $winLetter -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
 
 # --- Apply image + boot files ------------------------------------------
+# Announce the apply target: the Windows volume letter and the image's
+# uncompressed apply size in bytes. Expand-WindowsImage reports progress via
+# DISM's native callback, which does NOT reach the runspace progress stream,
+# so the GUI can't read a % from the cmdlet. Instead it polls this volume's
+# used space against the size below for a real apply percentage.
+$applyBytes = 0
+try { $applyBytes = [long]$imgDetail.ImageSize } catch { $applyBytes = 0 }
+Write-Host "Apply target: ${winLetter} $applyBytes"
 Write-Host "Applying image (this takes a while)..."
 Expand-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex -ApplyPath "${winLetter}:\"
 
@@ -353,8 +380,13 @@ if ((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) {
 
 Dismount-DiskImage -ImagePath $iso | Out-Null
 
-# Restore Windows automount (was disabled before Mount-VHD)
-& mountvol /E | Out-Null
-
 Write-Host "`nDone: $OutVhdx" -ForegroundColor Green
 Write-Host "Attach to a Gen-2 Hyper-V VM with Secure Boot + TPM enabled."
+}
+finally {
+    # Restore shell popups: re-enable automount and Shell Hardware Detection
+    # (both disabled at the top of the build). Runs on success AND failure so
+    # AutoPlay / format prompts are never left disabled system-wide.
+    & mountvol /E | Out-Null
+    if ($shellHWWasRunning) { Start-Service -Name ShellHWDetection -ErrorAction SilentlyContinue }
+}
