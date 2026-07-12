@@ -1,7 +1,7 @@
 ﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.4.0'
+    ModuleVersion     = '0.4.1'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -42,6 +42,16 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.4.1
+- Fix VHDX apply progress bar stuck at 0%. The previous approach read
+  ImageSize from Get-WindowsImage to calculate a denominator for volume-
+  usage polling, but ImageSize returns 0 for ESD files (all modern Windows
+  11 ISOs), so the GUI bar never moved. Replaced Expand-WindowsImage and
+  the DispatcherTimer volume-poller with a direct dism.exe /Apply-Image
+  call that streams its own CR-delimited progress output. The builder now
+  emits real 0-100% progress lines that the GUI pipeline consumes directly,
+  with no dependency on image metadata or disk polling.
+
 0.4.0
 - 25H2 only. Dropped 24H2 as a selectable Windows 11 release. The WIN
   RELEASE segment is fixed at 25H2, the -Release parameter on the builder
