@@ -927,12 +927,7 @@ function Show-Win11IsoWizard {
         $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#C0C0C0'; $wizStatus.Text = 'Starting build…'
         $wizBar.Visibility = 'Visible'; $wizBar.IsIndeterminate = $true
 
-        # Shared state between the build runspace and the UI-thread apply timer.
-        # Applying is flipped true only while Expand-WindowsImage runs; the timer
-        # (below) polls ApplyDrive's used space against ApplyTotal for a real %
-        # during that window. The builder fills ApplyDrive/ApplyTotal via its
-        # "Apply target: <drive> <bytes>" line just before the apply.
-        $wizState = [hashtable]::Synchronized(@{ Applying = $false; ApplyDrive = ''; ApplyTotal = [double]0 })
+        $wizState = [hashtable]::Synchronized(@{ Applying = $false })
 
         $shared = @{
             Window        = $dlg
@@ -959,24 +954,6 @@ function Show-Win11IsoWizard {
         # poll that volume's used space against the total apply size every 1.5s
         # while Applying is true. Runs on the UI thread, so it touches $wizBar /
         # $wizStatus directly (no Dispatcher marshalling needed).
-        $applyTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $applyTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
-        $applyTimer.add_Tick({
-            try {
-                if (-not $wizState.Applying -or -not $wizState.ApplyDrive -or $wizState.ApplyTotal -le 0) { return }
-                $vol = Get-Volume -DriveLetter $wizState.ApplyDrive -ErrorAction SilentlyContinue
-                if (-not $vol) { return }
-                $used = [double]($vol.Size - $vol.SizeRemaining)
-                $pct  = [int][Math]::Max(1, [Math]::Min(99, ($used / $wizState.ApplyTotal) * 100))
-                $wizBar.IsIndeterminate = $false
-                $wizBar.Maximum = 100
-                $wizBar.Value   = $pct
-                $wizStatus.Text = "Applying Windows image... $pct%"
-                $wizStatus.Foreground = '#C0C0C0'
-            } catch { }
-        })
-        $applyTimer.Start()
-        $script:WizApplyTimer = $applyTimer
 
         $build = {
             function WSet { param([string]$t, [string]$c = '#C0C0C0')
@@ -1030,9 +1007,9 @@ function Show-Win11IsoWizard {
                     elseif ($line -match 'Output VHDX name set from image: (.+)$') { $script:builtPath = $Matches[1].Trim(); WSet "Target: $script:builtPath" }
                     elseif ($line -match 'Using image index')                  { WSet 'Reading install image…' }
                     elseif ($line -match 'Creating .*GB, dynamic')             { WSet 'Creating empty VHDX…'; WBar -1 }
-                    elseif ($line -match '^Apply target: (\w) (\d+)')          { $WizState.ApplyDrive = $Matches[1]; $WizState.ApplyTotal = [double]$Matches[2] }
-                    elseif ($line -match 'Applying image')                     { WSet 'Applying Windows image... 0%'; WBar 0; $WizState.Applying = $true }
-                    elseif ($line -match 'DISM apply verified')                { $WizState.Applying = $false; WSet 'DISM apply verified - install.wim extracted cleanly.'; WBar -1 }
+                    elseif ($line -match 'Applying image')                     { WSet 'Applying Windows image…'; WBar -1; $WizState.Applying = $true }
+                    elseif ($line -match '^Apply progress: (\d+)')             { $pct = [int]$Matches[1]; WBar $pct; WSet "Applying Windows image… $pct%" }
+                    elseif ($line -match 'DISM apply verified')                { $WizState.Applying = $false; WSet 'DISM apply verified.'; WBar -1 }
                     elseif ($line -match 'Writing UEFI')                       { WSet 'Writing UEFI boot files…' }
                     elseif ($line -match 'Boot files verified')               { WSet 'UEFI boot files verified.' }
                     elseif ($line -match 'Dismounting')                       { WSet 'Finalizing VHDX…' }
@@ -1054,7 +1031,6 @@ function Show-Win11IsoWizard {
 
     $btnClose.Add_Click({ $dlg.Close() })
     $dlg.Add_Closing({
-        if ($script:WizApplyTimer) { try { $script:WizApplyTimer.Stop() } catch { }; $script:WizApplyTimer = $null }
         if ($script:WizPSInst)   { try { $script:WizPSInst.Stop() | Out-Null; $script:WizPSInst.Dispose() } catch { } }
         if ($script:WizRunspace) { try { $script:WizRunspace.Close(); $script:WizRunspace.Dispose() } catch { } }
         $script:WizPSInst = $null; $script:WizRunspace = $null

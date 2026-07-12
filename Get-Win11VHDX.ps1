@@ -312,16 +312,48 @@ $winLetter = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $win.Parti
 Format-Volume -DriveLetter $winLetter -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false | Out-Null
 
 # --- Apply image + boot files ------------------------------------------
-# Announce the apply target: the Windows volume letter and the image's
-# uncompressed apply size in bytes. Expand-WindowsImage reports progress via
-# DISM's native callback, which does NOT reach the runspace progress stream,
-# so the GUI can't read a % from the cmdlet. Instead it polls this volume's
-# used space against the size below for a real apply percentage.
-$applyBytes = 0
-try { $applyBytes = [long]$imgDetail.ImageSize } catch { $applyBytes = 0 }
-Write-Host "Apply target: ${winLetter} $applyBytes"
 Write-Host "Applying image (this takes a while)..."
-Expand-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex -ApplyPath "${winLetter}:\"
+
+# Run dism.exe /Apply-Image directly so we can stream real percentage progress
+# to the GUI. Expand-WindowsImage has no progress callback that reaches
+# PowerShell streams; dism.exe emits its own CR-delimited progress lines which
+# we parse and re-emit as "Apply progress: X%" for the GUI pipeline to consume.
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName               = "$env:SystemRoot\System32\Dism.exe"
+$psi.Arguments              = "/Apply-Image /ImageFile:`"$($installImg.FullName)`" /Index:$($imgInfo.ImageIndex) /ApplyDir:${winLetter}:\"
+$psi.UseShellExecute        = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError  = $true
+$psi.CreateNoWindow         = $true
+$dismProc = [System.Diagnostics.Process]::Start($psi)
+
+# DISM uses \r between progress updates when writing to a console; when
+# redirected it may use \r or \n — read in chunks and split on both.
+$buf     = New-Object char[] 256
+$pending = New-Object System.Text.StringBuilder
+$lastPct = -1
+while ($true) {
+    $read = $dismProc.StandardOutput.Read($buf, 0, $buf.Length)
+    if ($read -eq 0) { break }
+    for ($i = 0; $i -lt $read; $i++) {
+        $ch = $buf[$i]
+        if ($ch -eq [char]13 -or $ch -eq [char]10) {
+            $line = $pending.ToString().Trim()
+            [void]$pending.Clear()
+            if ($line -match '\b(\d+(?:\.\d+)?)%') {
+                $pct = [int][Math]::Round([double]$Matches[1])
+                if ($pct -ne $lastPct) { Write-Host "Apply progress: $pct%"; $lastPct = $pct }
+            }
+        } else {
+            [void]$pending.Append($ch)
+        }
+    }
+}
+$dismProc.WaitForExit()
+if ($dismProc.ExitCode -ne 0) {
+    $errText = try { $dismProc.StandardError.ReadToEnd().Trim() } catch { '' }
+    throw "DISM /Apply-Image failed (exit $($dismProc.ExitCode))$(if ($errText) { ": $errText" })"
+}
 
 # Verify DISM apply actually wrote a complete Windows install.
 # The SYSTEM registry hive is a load-bearing file every Windows boot
