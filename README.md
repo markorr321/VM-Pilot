@@ -20,20 +20,34 @@ What happens next depends on mode:
 
 ### Offline mode (CSV)
 
+An **AUTOPILOT VERSION** toggle picks what gets collected. Both formats come
+from WMI only, so neither needs network access inside the VM.
+
+| Toggle | File written in the VM | Contents |
+| ------ | ---------------------- | -------- |
+| **v1 Hash** (default) | `C:\HWID\AutoPilotHWID-<serial>.csv` | `Device Serial Number,Windows Product ID,Hardware Hash`, plus a **`Group Tag`** column when you fill the host field in |
+| **v2 Identifier** | `C:\HWID\AutoPilotID-<serial>.csv` | One headerless line: `Manufacturer,Model,Serial` |
+
 - `VMPilotCollect.ps1` runs as `SetupComplete.cmd` (specialize pass, SYSTEM
-  context, before OOBE).
-- WMI queries `Win32_BIOS` and `MDM_DevDetail_Ext01` for the serial and
-  hardware hash, writes the CSV to `C:\HWID\AutoPilotHWID-<serial>.csv`
-  inside the VM with a **`Group Tag`** column when you fill the host field in.
+  context, before OOBE) — with `-Identifier` appended for v2.
+- v1 queries `Win32_BIOS` + `MDM_DevDetail_Ext01` (the hash class needs the
+  SYSTEM context this pass provides). v2 queries `Win32_BIOS` +
+  `Win32_ComputerSystem`, stripping `.` and `,` from make/model the same way
+  the community script does.
+- The v2 file is headerless on purpose: that's the format Intune's Device
+  preparation **Import device identifiers** upload expects, and it matches
+  `Get-WindowsAutopilotInfoCommunity.ps1 -identifier -OutputFile`. **Group Tag
+  does not apply to v2** — the field hides when you select it, since device
+  preparation targets an Entra security group on the policy instead.
 - VM self-shuts-down via `shutdown /s /f /t 5`.
 - Host polls for VM `Off`, mounts the child VHDX read-only via a folder
   access path (avoids Windows auto-opening Explorer), copies the newest
-  matching CSV to `C:\Autopilot HWID Collection\`, dismounts, restarts the VM.
+  matching CSV to `C:\Autopilot CSV Collection\`, dismounts, restarts the VM.
 
 ### Online mode (Intune AutoPilot import)
 
 - VM lands at the **OOBE region screen** and **never leaves OOBE state**.
-- You press **`Shift+F10`** in vmconnect and run **`C:\import.bat`**.
+- You press **`Shift+F10`** in vmconnect and run **`C:\importv1.bat`**.
 - The bat pre-installs the NuGet provider + trusts PSGallery silently,
   then launches a small dark WPF window (`AutopilotEnroll.GUI.ps1`) with
   optional Group Tag and Assigned User UPN inputs.
@@ -50,6 +64,31 @@ What happens next depends on mode:
   returns to OOBE → AutoPilot detects the now-assigned profile and
   self-enrolls the device.
 
+### AutoPilot v2 / Device preparation (Online mode)
+
+Online mode also injects a second entry point, **`C:\importv2.bat`**, for
+**Autopilot device preparation (v2)**. v2 does not use a hardware hash — it
+imports the device **identifier** (`Manufacturer,Model,Serial`) instead:
+
+- `Shift+F10` → **`C:\importv2.bat`**.
+- The bat primes NuGet + PSGallery, then runs `AutopilotV2Import.ps1`, which
+  calls `Get-WindowsAutopilotInfoCommunity.ps1 -identifier -Online` against the
+  pre-injected copy at `C:\` (falling back to `Install-Script` from PSGallery
+  if that copy is missing).
+- Sign in when the Microsoft prompt appears; the identifier is posted to
+  `deviceManagement/importedDeviceIdentities`.
+- **Group Tag / Assigned User do not apply to v2.** Device preparation targets
+  an Entra security group on the policy, so add the VM's device object to that
+  group after the import, then reboot the VM to restart OOBE.
+
+Both entry points ship on every Online-mode VM, so you can test **v1 and v2**
+from the same image — pick per VM at the Shift+F10 prompt:
+
+| Run | Flow | What gets imported |
+| --- | ---- | ------------------ |
+| `C:\importv1.bat` | AutoPilot v1 (profile-based) | Hardware hash, + optional Group Tag / Assigned User, waits for profile assignment, reboots into enrollment |
+| `C:\importv2.bat` | AutoPilot v2 (Device preparation) | Device identifier `Manufacturer,Model,Serial` |
+
 ## Repo contents
 
 | File                          | Purpose                                                                       |
@@ -59,8 +98,9 @@ What happens next depends on mode:
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
 | `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
-| `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize, writes the AutoPilot CSV with optional Group Tag column. |
+| `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize. Writes the v1 hash CSV (optional Group Tag column) or, with `-Identifier`, the v2 `Manufacturer,Model,Serial` CSV. |
 | `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
+| `AutopilotV2Import.ps1`       | Online: runs inside the VM at OOBE via `C:\importv2.bat`. AutoPilot v2 / Device preparation — imports the device identifier (`-identifier -Online`). |
 | `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and cached community script for a clean re-run. |
 | `LICENSE`                     | MIT.                                                                          |
 | `README.md`                   | This file.                                                                    |
@@ -152,7 +192,7 @@ console window, then the host workflow takes over. Equivalent to
 | **COLLECT HWID** / **COLLECT & UPLOAD** | Label changes with mode. Kicks off the run.                            |
 | **OPEN AUTOPILOT** *(bottom-left)*     | Launches the Intune AutoPilot Devices page in your default browser.    |
 | **SETUP** *(bottom, green)*            | Opens the **Get Windows 11 Install Media** wizard: guided steps to download an official Microsoft ISO, then builds the parent VHDX from the ISO you pick (live percentage, auto-named by the release inside the ISO). Warns first if a parent VHDX already exists or a VM depends on it. |
-| **CLEANUP VMs** *(bottom-right, red)*  | Opens a dialog listing every Hyper-V VM with per-row checkboxes plus Remove Selected / Remove All buttons. Each removal stops the VM, deletes it, and wipes its `C:\VMs\<name>` folder. |
+| **CLEANUP VMs** *(bottom-right, red)*  | Opens a dialog listing every Hyper-V VM with per-row checkboxes plus Remove Selected / Remove All buttons. Each removal stops the VM, deletes it, and wipes its `C:\VMs\<name>` folder. An optional **Also remove records from Intune / Autopilot / Entra ID** checkbox additionally offboards each removed VM's cloud identity (records-only, keyed on BIOS serial) — see [Removing tenant records](#removing-tenant-records-cleanup-vms). |
 | **EXIT** *(bottom-right, gray)*        | Closes the GUI.                                                         |
 
 Status text and an indeterminate progress bar show what stage you're at.
@@ -206,7 +246,7 @@ rebuild can replace the parent).
 Once the VM is booted and at OOBE region screen:
 
 1. Press **`Shift+F10`** to open a command prompt.
-2. Run **`C:\import.bat`**.
+2. Run **`C:\importv1.bat`**.
 3. A small **VM-Pilot** window (subtitle: *AutoPilot Import*) appears with
    the device serial, a Group Tag field, and an Assigned User UPN field
    (both optional).
@@ -216,6 +256,50 @@ Once the VM is booted and at OOBE region screen:
 6. Watch the upload + assignment poll. When the script reboots the VM,
    AutoPilot picks up the assigned profile on the next OOBE boot and
    enrolls the device end-to-end without further interaction.
+
+For **Autopilot v2 (Device preparation)** run **`C:\importv2.bat`** at step 2
+instead — it imports the device identifier rather than the hash and has no
+Group Tag / Assigned User inputs. See *AutoPilot v2 / Device preparation*
+above.
+
+## Removing tenant records (CLEANUP VMs)
+
+A VM you enrolled in **Online** mode leaves records behind in your tenant —
+an Intune managed device, a Windows Autopilot device identity, and an Entra ID
+device object — all keyed on the device **serial number**. The **CLEANUP VMs**
+dialog can delete those at the same time it removes the local VM:
+
+1. Check the VMs to remove (or use **REMOVE ALL**).
+2. Tick **Also remove records from Intune / Autopilot / Entra ID (by serial)**.
+   Leave it unchecked to remove the VM locally only.
+3. Confirm. VM-Pilot reads each VM's BIOS serial *before* deleting it (the same
+   serial Autopilot registered), removes the VM locally, then opens a
+   **PowerShell 7** window that runs the `AutopilotCleanup` module's
+   `Invoke-AutopilotCleanup` against those serials. At its action menu, choose
+   **[1] Remove records only**.
+4. The module signs you in to Microsoft Graph, resolves each serial across all
+   three services (Autopilot → Intune → Entra ID), deletes in order, then
+   **monitors** removal live in the terminal (*Waiting for 1 of 1 to be removed
+   from Intune… ✓ removed…*) until each service confirms the record is gone.
+
+Notes:
+
+- **Records-only, never a wipe.** The VM is being destroyed locally, so there's
+  nothing to wipe — pick **[1]** at the menu, not the WIPE options.
+- **Why the module's own flow?** Entra ID devices aren't queryable by hardware
+  serial (the serial lives in `physicalIds`), so the record is resolved via the
+  Autopilot device's Azure AD Device ID. `Invoke-AutopilotCleanup` does that
+  resolution and the monitoring; driving the low-level `Remove-*` verbs by
+  serial alone would not delete the Entra object.
+- **Missing records are a no-op.** An Offline VM whose CSV you never imported
+  has no cloud records, so its serial simply reports *not found* per service.
+- **Requires PowerShell 7 (`pwsh`)** and the `AutopilotCleanup` module
+  (auto-installed from PSGallery on first use). If `pwsh` isn't installed, the
+  checkbox is disabled with a note. The Graph sign-in needs an **Intune admin**
+  with the same scopes Online enrollment uses.
+- **Replication lag:** immediately after an Online enrollment, a just-imported
+  device may not yet be deletable from every service; the runner treats a
+  not-found as benign, so re-run if a service lags.
 
 ## Resetting state
 
@@ -237,7 +321,7 @@ cached community AutoPilot script. Override the keep list with
 
 | Mode    | Location                                                                  |
 | ------- | ------------------------------------------------------------------------- |
-| Offline | `C:\Autopilot HWID Collection\AutoPilotHWID-<serial>.csv` on the host.   |
+| Offline | `C:\Autopilot CSV Collection\` on the host — `AutoPilotHWID-<serial>.csv` (v1) or `AutoPilotID-<serial>.csv` (v2). |
 | Online  | Imported directly into your Intune tenant; the CSV exists only inside the VM at `C:\HWID\` and is discarded with the VM. |
 
 ## PowerShell 5.1 vs 7
@@ -294,6 +378,8 @@ characters (em-dashes, etc.) and are therefore saved **UTF-8 with a BOM** so
   https://github.com/andrew-s-taylor/WindowsAutopilotInfo
 - **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
   https://github.com/SasStu/HyperV.VMFactory
+- **Tenant record cleanup (Intune / Autopilot / Entra ID)** — `AutopilotCleanup`
+  by Mark Orr: https://github.com/markorr321/Autopilot-Cleanup
 - **ISO download resolver (CLI fallback)** — Pete Batard's Fido:
   https://github.com/pbatard/Fido
 - **Original CLI workflow that this replaced** —

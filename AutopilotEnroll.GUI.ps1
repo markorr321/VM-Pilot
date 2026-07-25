@@ -1,6 +1,8 @@
 ﻿# AutopilotEnroll.GUI.ps1 -- runs INSIDE the VM at OOBE.
 # Minimal WPF window that fronts Get-WindowsAutopilotInfoCommunity.ps1.
-# Launched by C:\Enroll.bat from the OOBE Shift+F10 cmd prompt.
+# Launched by C:\importv1.bat from the OOBE Shift+F10 cmd prompt.
+# (AutoPilot v1 — hardware hash + profile assignment. The v2 / Device
+#  preparation counterpart is C:\importv2.bat → AutopilotV2Import.ps1.)
 #
 # Click "Enroll Device" -> launches the community script in a visible PowerShell
 # window with -Online -Reboot (plus GroupTag/AssignedUser if filled in).

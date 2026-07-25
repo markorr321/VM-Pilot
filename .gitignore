@@ -13,3 +13,9 @@
 
 # Third-party runtime artifacts — fetched at build time, not redistributed
 Fido.ps1
+
+# Demo recordings — tens of MB each. GitHub warns over 50 MB per file and
+# rejects over 100 MB, and blobs this size stay in history forever. Attach
+# them to a GitHub Release instead of committing them.
+DEMO/
+*.mp4

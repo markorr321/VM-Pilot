@@ -248,17 +248,20 @@ $script:BuilderScript      = $(
     else                              { $localBuilder }
 )
 $script:VMPath             = 'C:\VMs'
-$script:FilesToCopy        = @('C:\Autopilot HWID Collection\AutoPilotHWID-Collection.bat')
-$script:SearchPattern      = 'AutoPilotHWID*'
+$script:FilesToCopy        = @('C:\Autopilot CSV Collection\AutoPilotHWID-Collection.bat')
+$script:SearchPattern      = 'AutoPilotHWID*'   # Offline v1 — hash CSV
+$script:SearchPatternV2    = 'AutoPilotID*'     # Offline v2 — identifier CSV
 $script:SourceFolder       = 'HWID'
-$script:DestinationPath    = 'C:\Autopilot HWID Collection'
+$script:DestinationPath    = 'C:\Autopilot CSV Collection'   # holds both v1 hash and v2 identifier CSVs
 # Community AutoPilot script — pre-cached on the host, injected onto each VM's VHDX
 # at C:\ so the user can run it from OOBE Shift+F10 with a single short command.
 $script:CommunityScriptUrl   = 'https://raw.githubusercontent.com/andrew-s-taylor/WindowsAutopilotInfo/main/Community%20Version/get-windowsautopilotinfocommunity.ps1'
 $script:CommunityScriptCache = 'C:\Tools\VMPilot\Get-WindowsAutopilotInfoCommunity.ps1'
 $script:CommunityScriptInVM  = 'Get-WindowsAutopilotInfoCommunity.ps1'   # lands at C:\<this>
 $script:EnrollGuiInVM        = 'AutopilotEnroll.GUI.ps1'                 # lands at C:\<this>
-$script:EnrollBatInVM        = 'import.bat'                              # lands at C:\import.bat — what the user runs at Shift+F10
+$script:EnrollBatInVM        = 'importv1.bat'                           # lands at C:\importv1.bat — AutoPilot v1 (hash + profile assignment)
+$script:EnrollV2ScriptInVM   = 'AutopilotV2Import.ps1'                  # lands at C:\<this>
+$script:EnrollV2BatInVM      = 'importv2.bat'                           # lands at C:\importv2.bat — AutoPilot v2 (Device preparation) import
 $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offline: lands at C:\<this>, called by SetupComplete.cmd
 $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevices.ReactView/filterOnManualRemediationRequired~/false'
 
@@ -403,7 +406,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
     <!-- Title -->
     <StackPanel Grid.Row="0" Margin="0,0,0,22">
       <TextBlock Text="VM-Pilot" FontSize="26" FontWeight="SemiBold"/>
-      <TextBlock Text="Spin up a fresh Hyper-V VM and collect the AutoPilot hardware hash." Foreground="#909090" FontSize="13" Margin="0,6,0,0"/>
+      <TextBlock Text="Spin up a fresh Hyper-V VM and collect its AutoPilot hardware hash or device identifier." Foreground="#909090" FontSize="13" Margin="0,6,0,0"/>
     </StackPanel>
 
     <!-- Mode (left) + Win Release (right) -->
@@ -482,11 +485,26 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
       </StackPanel>
     </Grid>
 
-    <!-- Group Tag (Offline only; toggled by Update-ModeUI). Online mode captures its
-         own group tag inside the VM via AutopilotEnroll.GUI.ps1. -->
-    <StackPanel Grid.Row="4" x:Name="GroupTagPanel" Margin="0,0,0,18">
-      <TextBlock Text="GROUP TAG (OPTIONAL)" Style="{StaticResource FieldLabel}"/>
-      <TextBox x:Name="GroupTagBox" Text=""/>
+    <!-- Offline-only fields (toggled by Update-ModeUI). Online mode picks its
+         AutoPilot version and group tag inside the VM instead: importv1.bat /
+         importv2.bat at the OOBE Shift+F10 prompt. -->
+    <StackPanel Grid.Row="4" x:Name="OfflinePanel" Margin="0,0,0,18">
+      <TextBlock Text="AUTOPILOT VERSION" Style="{StaticResource FieldLabel}"/>
+      <Grid Margin="0,0,0,14">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="6"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <RadioButton Grid.Column="0" x:Name="ApV1" GroupName="ApVersion" Content="v1 Hash" IsChecked="True" Style="{StaticResource Segment}"/>
+        <RadioButton Grid.Column="2" x:Name="ApV2" GroupName="ApVersion" Content="v2 Identifier" Style="{StaticResource Segment}"/>
+      </Grid>
+
+      <!-- v1 only: identifier imports have no group tag. -->
+      <StackPanel x:Name="GroupTagPanel">
+        <TextBlock Text="GROUP TAG (OPTIONAL)" Style="{StaticResource FieldLabel}"/>
+        <TextBox x:Name="GroupTagBox" Text=""/>
+      </StackPanel>
     </StackPanel>
 
     <!-- Primary button -->
@@ -543,10 +561,11 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
                      Margin="0,4,0,0" FontStyle="Italic"/>
         </StackPanel>
 
-        <!-- HARDWARE HASH path: shown after an Offline collect. The .csv on the
-             host holding the AutoPilot hardware hash; the link opens its folder. -->
+        <!-- CSV path: shown after an Offline collect. The .csv on the host holding
+             the AutoPilot hardware hash (v1) or device identifier (v2); the link
+             opens its folder. The label is retitled per version at collect time. -->
         <StackPanel x:Name="HashPanel" Visibility="Collapsed" Margin="0,10,0,0">
-          <TextBlock Text="HARDWARE HASH SAVED TO" Style="{StaticResource FieldLabel}" HorizontalAlignment="Center"/>
+          <TextBlock x:Name="HashPanelLabel" Text="HARDWARE HASH SAVED TO" Style="{StaticResource FieldLabel}" HorizontalAlignment="Center"/>
           <TextBlock x:Name="HashPathText" FontSize="11"
                      FontFamily="Cascadia Mono, Consolas, Courier New"
                      Foreground="#C0C0C0" HorizontalAlignment="Center" TextAlignment="Center"
@@ -672,9 +691,13 @@ $ModeOffline    = $window.FindName('ModeOffline')
 $ModeOnline     = $window.FindName('ModeOnline')
 $GroupTagBox    = $window.FindName('GroupTagBox')
 $GroupTagPanel  = $window.FindName('GroupTagPanel')
+$OfflinePanel   = $window.FindName('OfflinePanel')
+$ApV1           = $window.FindName('ApV1')
+$ApV2           = $window.FindName('ApV2')
 $SerialPanel    = $window.FindName('SerialPanel')
 $SerialText     = $window.FindName('SerialText')
 $HashPanel      = $window.FindName('HashPanel')
+$HashPanelLabel = $window.FindName('HashPanelLabel')
 $HashPathText   = $window.FindName('HashPathText')
 $HashOpenLink   = $window.FindName('HashOpenLink')
 $CleanupButton    = $window.FindName('CleanupButton')
@@ -692,19 +715,29 @@ $window.Add_SourceInitialized({
     } catch { }
 })
 
-# --- Mode toggle: swap button label + show/hide Group Tag (Offline only) --
+# --- Mode toggle: swap button label + show/hide the Offline-only fields ----
+# Offline also picks the AutoPilot version here; v2 collects an identifier
+# (Manufacturer,Model,Serial), which has no group tag, so that field hides.
 function Update-ModeUI {
     if ($ModeOnline.IsChecked) {
-        $RunButton.Content       = 'COLLECT & UPLOAD'
-        $GroupTagPanel.Visibility = 'Collapsed'
+        $RunButton.Content        = 'COLLECT & UPLOAD'
+        $OfflinePanel.Visibility  = 'Collapsed'
     } else {
-        $RunButton.Content       = 'COLLECT HWID'
-        $GroupTagPanel.Visibility = 'Visible'
+        $OfflinePanel.Visibility  = 'Visible'
+        if ($ApV2.IsChecked) {
+            $RunButton.Content        = 'COLLECT IDENTIFIER'
+            $GroupTagPanel.Visibility = 'Collapsed'
+        } else {
+            $RunButton.Content        = 'COLLECT HWID'
+            $GroupTagPanel.Visibility = 'Visible'
+        }
     }
 }
 $ModeOffline.Add_Checked({ Update-ModeUI })
 $ModeOnline.Add_Checked({ Update-ModeUI })
-Update-ModeUI   # apply initial state (Offline default → Group Tag visible)
+$ApV1.Add_Checked({ Update-ModeUI })
+$ApV2.Add_Checked({ Update-ModeUI })
+Update-ModeUI   # apply initial state (Offline + v1 → Group Tag visible)
 
 # --- UI helpers -----------------------------------------------------------
 function Set-Status {
@@ -1048,7 +1081,10 @@ function Start-Workflow {
     $cpu      = Get-CheckedRadio -Values 1,2,4   -Prefix 'Cpu' -Default 2
     $ramGB    = Get-CheckedRadio -Values 4,8,16  -Prefix 'Ram' -Default 4
     $online   = [bool]$ModeOnline.IsChecked
-    $groupTag = $GroupTagBox.Text.Trim()
+    # Offline only: v2 collects the device identifier instead of the hash, and
+    # ignores the group tag (device preparation has no per-device tag).
+    $collectId = (-not $online) -and [bool]$ApV2.IsChecked
+    $groupTag  = if ($collectId) { '' } else { $GroupTagBox.Text.Trim() }
     # WIN RELEASE is fixed at 25H2 — the only supported Windows 11 release.
     $release    = '25H2'
     $bootSource = "C:\VMs\Win11-$release.vhdx"
@@ -1093,6 +1129,7 @@ function Start-Workflow {
         CpuCount            = $cpu
         RamGB               = $ramGB
         Online              = $online
+        CollectIdentifier   = $collectId
         GroupTag            = $groupTag
         Release             = $release
         ScriptDir           = $PSScriptRoot
@@ -1101,6 +1138,7 @@ function Start-Workflow {
         VMPath          = $script:VMPath
         FilesToCopy     = $script:FilesToCopy
         SearchPattern   = $script:SearchPattern
+        SearchPatternV2 = $script:SearchPatternV2
         SourceFolder    = $script:SourceFolder
         DestinationPath = $script:DestinationPath
         CommunityScriptUrl   = $script:CommunityScriptUrl
@@ -1108,6 +1146,8 @@ function Start-Workflow {
         CommunityScriptInVM  = $script:CommunityScriptInVM
         EnrollGuiInVM        = $script:EnrollGuiInVM
         EnrollBatInVM        = $script:EnrollBatInVM
+        EnrollV2ScriptInVM   = $script:EnrollV2ScriptInVM
+        EnrollV2BatInVM      = $script:EnrollV2BatInVM
         CollectScriptInVM    = $script:CollectScriptInVM
         Window          = $window
         StatusText      = $StatusText
@@ -1116,10 +1156,12 @@ function Start-Workflow {
         SerialPanel     = $SerialPanel
         SerialText      = $SerialText
         HashPanel       = $HashPanel
+        HashPanelLabel  = $HashPanelLabel
         HashPathText    = $HashPathText
         RunButton       = $RunButton
         ActivityBar     = $ActivityBar
         ModeOnline      = $ModeOnline
+        ApV2            = $ApV2
     }
 
     $script:Runspace = [runspacefactory]::CreateRunspace()
@@ -1168,6 +1210,7 @@ function Start-Workflow {
             param([string]$Path)
             if ([string]::IsNullOrWhiteSpace($Path)) { return }
             $Window.Dispatcher.Invoke([Action]{
+                $HashPanelLabel.Text   = if ($CollectIdentifier) { 'DEVICE IDENTIFIER SAVED TO' } else { 'HARDWARE HASH SAVED TO' }
                 $HashPathText.Text     = $Path
                 $HashPanel.Visibility  = 'Visible'
             })
@@ -1175,7 +1218,9 @@ function Start-Workflow {
         function Restore-Button {
             $Window.Dispatcher.Invoke([Action]{
                 $RunButton.IsEnabled = $true
-                if ($ModeOnline.IsChecked) { $RunButton.Content = 'COLLECT & UPLOAD' } else { $RunButton.Content = 'COLLECT HWID' }
+                if ($ModeOnline.IsChecked)  { $RunButton.Content = 'COLLECT & UPLOAD' }
+                elseif ($ApV2.IsChecked)    { $RunButton.Content = 'COLLECT IDENTIFIER' }
+                else                        { $RunButton.Content = 'COLLECT HWID' }
                 $ActivityBar.Visibility = 'Collapsed'
                 $StatusText.Text = ''
             })
@@ -1321,7 +1366,7 @@ function Start-Workflow {
 
                 if ($Online) {
                     # Drop the community AutoPilot script + the in-VM enrollment GUI + a one-line .bat
-                    # at C:\ on the VHDX. User runs `C:\Enroll.bat` from OOBE Shift+F10 → opens the
+                    # at C:\ on the VHDX. User runs `C:\importv1.bat` from OOBE Shift+F10 → opens the
                     # in-VM GUI → user clicks Enroll → community script handles sign-in + upload +
                     # assignment + -Reboot which returns VM to OOBE → AutoPilot self-enrolls.
                     Copy-Item -Path $CommunityScriptCache -Destination (Join-Path $mountFolder $CommunityScriptInVM) -Force
@@ -1338,13 +1383,32 @@ function Start-Workflow {
                     # gets passed to PowerShell verbatim and fails to parse.
                     $batContent = @"
 @echo off
-title VM-Pilot AutoPilot Import
+title VM-Pilot AutoPilot v1 Import
 echo Priming PowerShell package management (no interaction needed)...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
 echo Launching AutoPilot Enrollment GUI...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollGuiInVM
 "@
                     [IO.File]::WriteAllText((Join-Path $mountFolder $EnrollBatInVM), $batContent, [Text.UTF8Encoding]::new($false))
+
+                    # AutoPilot v2 (Device preparation): imports the device *identifier*
+                    # (Manufacturer,Model,Serial) rather than the hardware hash. Separate
+                    # entry point at C:\importv2.bat so the user picks v1 or v2 at OOBE.
+                    $enrollV2Src = Join-Path $ScriptDir $EnrollV2ScriptInVM
+                    if (-not (Test-Path $enrollV2Src -PathType Leaf)) {
+                        throw "In-VM AutoPilot v2 import script not found in repo at $enrollV2Src"
+                    }
+                    Copy-Item -Path $enrollV2Src -Destination (Join-Path $mountFolder $EnrollV2ScriptInVM) -Force
+
+                    $batV2Content = @"
+@echo off
+title VM-Pilot AutoPilot v2 Import
+echo Priming PowerShell package management (no interaction needed)...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
+echo Starting AutoPilot v2 (Device Preparation) import...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollV2ScriptInVM
+"@
+                    [IO.File]::WriteAllText((Join-Path $mountFolder $EnrollV2BatInVM), $batV2Content, [Text.UTF8Encoding]::new($false))
                 } else {
                     # Offline: copy the collection script + generate SetupComplete.cmd that
                     # invokes it with -GroupTag (omitted if blank). Collection script writes
@@ -1352,11 +1416,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollGuiInVM
                     $collectSrc = Join-Path $ScriptDir $CollectScriptInVM
                     Copy-Item -Path $collectSrc -Destination (Join-Path $mountFolder $CollectScriptInVM) -Force
 
+                    # v2 writes a headerless Manufacturer,Model,Serial line instead of the
+                    # hash CSV; -GroupTag doesn't apply there and is already blanked out.
+                    $idArg  = if ($CollectIdentifier) { ' -Identifier' } else { '' }
                     $tagArg = if (-not [string]::IsNullOrWhiteSpace($GroupTag)) { " -GroupTag `"$GroupTag`"" } else { '' }
                     $setupContent = @"
 @echo off
 if not exist "C:\HWID" mkdir "C:\HWID"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$CollectScriptInVM$tagArg > C:\HWID\collection.log 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$CollectScriptInVM$idArg$tagArg > C:\HWID\collection.log 2>&1
 shutdown /s /f /t 5
 "@
                     $setupDir = Join-Path $mountFolder 'Windows\Setup\Scripts'
@@ -1393,7 +1460,8 @@ shutdown /s /f /t 5
                 return
             }
 
-            Set-Status 'Collecting hardware hash inside VM…'
+            $collectLabel = if ($CollectIdentifier) { 'device identifier' } else { 'hardware hash' }
+            Set-Status "Collecting $collectLabel inside VM…"
             $maxWait = 900; $elapsed = 0; $shutdown = $false
             while ($elapsed -lt $maxWait) {
                 $state = (Get-VM -Name $VMName -ErrorAction SilentlyContinue).State
@@ -1401,7 +1469,7 @@ shutdown /s /f /t 5
                 Start-Sleep -Seconds 5
                 $elapsed += 5
                 if ($elapsed % 30 -eq 0) {
-                    Set-Status "Collecting hardware hash inside VM… (${elapsed}s)"
+                    Set-Status "Collecting $collectLabel inside VM… (${elapsed}s)"
                 }
             }
             if (-not $shutdown) {
@@ -1434,7 +1502,8 @@ shutdown /s /f /t 5
                 $sourcePath = $mountFolder
                 $searchPath = Join-Path $sourcePath $SourceFolder
                 if (Test-Path $searchPath) { $sourcePath = $searchPath }
-                $files = Get-ChildItem -Path $sourcePath -Filter $SearchPattern -Recurse -File -ErrorAction SilentlyContinue |
+                $pattern = if ($CollectIdentifier) { $SearchPatternV2 } else { $SearchPattern }
+                $files = Get-ChildItem -Path $sourcePath -Filter $pattern -Recurse -File -ErrorAction SilentlyContinue |
                          Sort-Object LastWriteTime -Descending
 
                 if ($files.Count -gt 0) {
@@ -1442,10 +1511,17 @@ shutdown /s /f /t 5
                     $destCsv = Join-Path $DestinationPath $files[0].Name
                     Copy-Item -Path $files[0].FullName -Destination $destCsv -Force
                     $collected = $true
-                    # Read serial from the CSV so we can surface it in the GUI + clipboard
+                    # Read serial from the CSV so we can surface it in the GUI + clipboard.
+                    # The v2 file is headerless (Intune's import format), so supply the
+                    # column names rather than letting Import-Csv eat the only data row.
                     try {
-                        $row = Import-Csv -Path $destCsv | Select-Object -First 1
-                        if ($row) { $script:CollectedSerial = "$($row.'Device Serial Number')" }
+                        if ($CollectIdentifier) {
+                            $row = Import-Csv -Path $destCsv -Header 'Manufacturer','Model','Serial' | Select-Object -First 1
+                            if ($row) { $script:CollectedSerial = "$($row.Serial)" }
+                        } else {
+                            $row = Import-Csv -Path $destCsv | Select-Object -First 1
+                            if ($row) { $script:CollectedSerial = "$($row.'Device Serial Number')" }
+                        }
                     } catch { }
                 }
             } finally {
@@ -1462,7 +1538,8 @@ shutdown /s /f /t 5
                 Show-HashPath -Path $destCsv
                 Set-Done
             } else {
-                Set-Result -Text 'No hash CSV found on the VM. Mount its VHDX and check C:\HWID\collection.log.' -Color '#F03A47'
+                $what = if ($CollectIdentifier) { 'identifier' } else { 'hash' }
+                Set-Result -Text "No $what CSV found on the VM. Mount its VHDX and check C:\HWID\collection.log." -Color '#F03A47'
             }
 
         } catch {
@@ -1506,13 +1583,19 @@ function Show-CleanupDialog {
              Background="#1F1F1F" Foreground="#FFFFFF" BorderBrush="#3A3A3A" BorderThickness="1"
              SelectionMode="Single"/>
 
-    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-      <Button x:Name="BtnRemoveSelected" Content="REMOVE SELECTED" Width="170" Height="36" Margin="0,0,8,0"
-              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
-      <Button x:Name="BtnRemoveAll" Content="REMOVE ALL" Width="120" Height="36" Margin="0,0,8,0"
-              Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
-      <Button x:Name="BtnClose" Content="CLOSE" Width="100" Height="36"
-              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+    <StackPanel Grid.Row="3" Orientation="Vertical" Margin="0,14,0,0">
+      <CheckBox x:Name="ChkCloud" Foreground="#FFFFFF" Margin="2,0,0,2"
+                Content="Also remove records from Intune / Autopilot / Entra ID (by serial)"/>
+      <TextBlock x:Name="ChkCloudHint" Foreground="#909090" FontSize="11" Margin="24,0,0,10" TextWrapping="Wrap"
+                 Text="Records-only offboard keyed on each VM's BIOS serial. Opens a PowerShell window that signs in to Microsoft Graph (Intune admin required)."/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="BtnRemoveSelected" Content="REMOVE SELECTED" Width="170" Height="36" Margin="0,0,8,0"
+                Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+        <Button x:Name="BtnRemoveAll" Content="REMOVE ALL" Width="120" Height="36" Margin="0,0,8,0"
+                Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+        <Button x:Name="BtnClose" Content="CLOSE" Width="100" Height="36"
+                Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+      </StackPanel>
     </StackPanel>
   </Grid>
 </Window>
@@ -1525,6 +1608,23 @@ function Show-CleanupDialog {
     $BtnRemoveSel     = $dlg.FindName('BtnRemoveSelected')
     $BtnRemoveAll     = $dlg.FindName('BtnRemoveAll')
     $BtnClose         = $dlg.FindName('BtnClose')
+    $ChkCloud         = $dlg.FindName('ChkCloud')
+    $ChkCloudHint     = $dlg.FindName('ChkCloudHint')
+
+    # Cloud (tenant record) cleanup runs under the AutopilotCleanup module,
+    # whose manifest requires PowerShell 7.0. Resolve a pwsh host: use the
+    # current process if we're already Core, otherwise look for pwsh.exe on
+    # PATH. If neither exists, the option is disabled with a why note.
+    $pwshExe = if ($PSVersionTable.PSEdition -eq 'Core') {
+        (Get-Process -Id $PID).Path
+    } else {
+        (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $pwshExe) {
+        $ChkCloud.IsChecked = $false
+        $ChkCloud.IsEnabled = $false
+        $ChkCloudHint.Text  = 'Tenant cleanup needs PowerShell 7 (pwsh), which was not found. Install it from https://aka.ms/powershell to enable this.'
+    }
 
     function Update-VmList {
         $VmListBox.Items.Clear()
@@ -1566,6 +1666,60 @@ function Show-CleanupDialog {
         }
     }
 
+    # Read a VM's firmware serial from Hyper-V settings. This is the same value
+    # Win32_BIOS returns inside the VM, so it's the serial Autopilot/Intune/Entra
+    # registered under - the join key for tenant cleanup. Must run BEFORE the VM
+    # is deleted (a removed VM can't be queried).
+    function Get-VmSerial {
+        param([string]$Name)
+        try {
+            $ms = Get-CimInstance -Namespace 'root\virtualization\v2' `
+                                  -ClassName 'Msvm_VirtualSystemSettingData' `
+                                  -Filter "ElementName='$Name' AND VirtualSystemType='Microsoft:Hyper-V:System:Realized'" `
+                                  -ErrorAction SilentlyContinue
+            return "$($ms.BIOSSerialNumber)".Trim()
+        } catch { return '' }
+    }
+
+    # Launch the pwsh-only records-only offboard for the given serials.
+    function Start-CloudCleanup {
+        param([string[]]$Serials)
+        $runner = Join-Path $PSScriptRoot 'Invoke-VMPilotCloudCleanup.ps1'
+        if (-not (Test-Path $runner)) {
+            [void][System.Windows.MessageBox]::Show("Cloud cleanup helper not found:`r`n$runner", 'VM Cleanup',
+                [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            return
+        }
+        # Each serial as its own double-quoted token, comma-joined into a
+        # PowerShell array literal for the -SerialNumber parameter. Strip any
+        # embedded quotes defensively (Hyper-V serials never contain them).
+        $serialArg = ($Serials | ForEach-Object { '"{0}"' -f ($_ -replace '"','') }) -join ','
+        $argLine   = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -SerialNumber {1}' -f $runner, $serialArg
+        Start-Process -FilePath $pwshExe -ArgumentList $argLine
+    }
+
+    # Shared path for both REMOVE buttons: capture serials first (if cloud
+    # cleanup is on), remove locally, refresh, then offboard tenant records.
+    function Invoke-Removal {
+        param([string[]]$Names)
+        $removeCloud = [bool]$ChkCloud.IsChecked
+        $serials = @()
+        if ($removeCloud) {
+            foreach ($n in $Names) { $s = Get-VmSerial -Name $n; if ($s) { $serials += $s } }
+        }
+        Remove-VMs -Names $Names
+        Update-VmList
+        if ($removeCloud) {
+            if ($serials.Count -eq 0) {
+                [void][System.Windows.MessageBox]::Show(
+                    'The VM(s) were removed locally, but no BIOS serial could be read for any of them, so no tenant records were touched.',
+                    'VM Cleanup', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+                return
+            }
+            Start-CloudCleanup -Serials $serials
+        }
+    }
+
     $BtnRemoveSel.Add_Click({
         $names = Get-CheckedNames
         if ($names.Count -eq 0) {
@@ -1574,11 +1728,13 @@ function Show-CleanupDialog {
             return
         }
         $msg = "Permanently remove $($names.Count) VM(s)?`r`n`r`n" + ($names -join "`r`n")
+        if ($ChkCloud.IsChecked) {
+            $msg += "`r`n`r`nAlso DELETE their Intune / Autopilot / Entra ID records (keyed on BIOS serial). This offboards the device from your tenant."
+        }
         $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Cleanup',
             [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
         if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
-        Remove-VMs -Names $names
-        Update-VmList
+        Invoke-Removal -Names $names
     })
 
     $BtnRemoveAll.Add_Click({
@@ -1588,11 +1744,13 @@ function Show-CleanupDialog {
         }
         if ($names.Count -eq 0) { return }
         $msg = "Permanently remove ALL $($names.Count) VM(s)?`r`n`r`nThis includes VMs you did not create with VM-Pilot."
+        if ($ChkCloud.IsChecked) {
+            $msg += "`r`n`r`nAlso DELETE the Intune / Autopilot / Entra ID records for EVERY listed VM's serial. Records for non-VM-Pilot VMs will be removed too."
+        }
         $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Remove ALL',
             [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
         if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
-        Remove-VMs -Names $names
-        Update-VmList
+        Invoke-Removal -Names $names
     })
 
     $BtnClose.Add_Click({ $dlg.Close() })

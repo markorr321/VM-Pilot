@@ -1,7 +1,7 @@
 ﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.4.2'
+    ModuleVersion     = '0.5.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -29,7 +29,9 @@
         'VMPilot.GUI.ps1',
         'VMPilotCollect.ps1',
         'AutopilotEnroll.GUI.ps1',
+        'AutopilotV2Import.ps1',
         'Get-Win11VHDX.ps1',
+        'Invoke-VMPilotCloudCleanup.ps1',
         'Reset-VMPilot.ps1',
         'VMPilot.bat',
         'README.md'
@@ -42,6 +44,45 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.5.0
+- The offline output folder is renamed C:\Autopilot HWID Collection ->
+  C:\Autopilot CSV Collection, since it now holds identifier CSVs as well as
+  hash CSVs. Existing files in the old folder are left where they are.
+- Offline mode gains an AUTOPILOT VERSION toggle: "v1 Hash" (unchanged) or
+  "v2 Identifier", which collects Manufacturer,Model,Serial to
+  C:\HWID\AutoPilotID-<serial>.csv inside the VM and copies it back to the same
+  host folder. The file is headerless, matching the format Intune's Device
+  preparation "Import device identifiers" upload expects. Group Tag hides for
+  v2 since it does not apply, and the button reads COLLECT IDENTIFIER. Both
+  formats are WMI-only, so v2 needs no network in the VM.
+- Online mode now also injects C:\importv2.bat for Autopilot v2 (Device
+  preparation). It runs the bundled AutopilotV2Import.ps1, which calls the
+  community script with -identifier -Online to import the device identifier
+  (Manufacturer,Model,Serial) instead of a hardware hash. Group Tag and
+  Assigned User do not apply to v2 - add the device to the Entra security
+  group targeted by your Device preparation policy after importing.
+- The v1 entry point is renamed C:\import.bat -> C:\importv1.bat so the two
+  flows read as a pair. Its behaviour (hash upload, Group Tag / Assigned User,
+  profile-assignment poll, reboot into enrollment) is unchanged. VMs built by
+  earlier versions still have the old C:\import.bat name.
+- CLEANUP VMs can now offboard tenant records. A new "Also remove records
+  from Intune / Autopilot / Entra ID (by serial)" checkbox in the VM Cleanup
+  dialog deletes each removed VM's cloud identity at the same time as the
+  local VM (or the local VM alone if left unchecked). It reads each VM's BIOS
+  serial before deletion - the same serial Autopilot registered.
+- New bundled Invoke-VMPilotCloudCleanup.ps1 runner. It hands the serial(s) to
+  Mark Orr's AutopilotCleanup module (PSGallery) via its Invoke-AutopilotCleanup
+  orchestrator, which resolves each serial across all three services (Autopilot
+  -> Intune by serial -> Entra ID by the Autopilot record's Azure AD Device ID),
+  deletes in the dependency-safe order, and then MONITORS removal live in the
+  terminal until each service confirms the record is gone. Choose [1] Remove
+  records only at the module's menu - the VM is destroyed locally, so there is
+  nothing to wipe. A device missing from a service is a benign no-op (e.g. an
+  Offline VM whose CSV was never imported).
+- Because AutopilotCleanup requires PowerShell 7, the GUI launches the runner in
+  a pwsh window that signs in to Microsoft Graph (Intune admin required). The
+  checkbox is disabled with a note if pwsh 7 is not installed.
+
 0.4.2
 - Fix VHDX apply progress bar stuck at 0%. The previous approach read
   ImageSize from Get-WindowsImage to calculate a denominator for volume-
