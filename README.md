@@ -1,5 +1,13 @@
 # VM-Pilot
 
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/VM-Pilot?label=PowerShell%20Gallery&labelColor=555&color=0078D4)](https://www.powershellgallery.com/packages/VM-Pilot)
+[![downloads](https://img.shields.io/powershellgallery/dt/VM-Pilot?label=downloads&labelColor=555&color=blue)](https://www.powershellgallery.com/packages/VM-Pilot)
+[![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?labelColor=555)](https://aka.ms/powershell)
+[![License](https://img.shields.io/badge/License-MIT-brightgreen?labelColor=555)](LICENSE)
+
+> Published on the [PowerShell Gallery](https://www.powershellgallery.com/packages/VM-Pilot).
+> Install with `Install-Module -Name VM-Pilot`.
+
 WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware
 hashes — either as a CSV on disk (Offline) or imported directly into Intune
 AutoPilot from inside the VM via Andrew Taylor's community script (Online).
@@ -324,26 +332,25 @@ cached community AutoPilot script. Override the keep list with
 | Offline | `C:\Autopilot CSV Collection\` on the host — `AutoPilotHWID-<serial>.csv` (v1) or `AutoPilotID-<serial>.csv` (v2). |
 | Online  | Imported directly into your Intune tenant; the CSV exists only inside the VM at `C:\HWID\` and is discarded with the VM. |
 
-## PowerShell 5.1 vs 7
+## PowerShell 7 only
 
-VM-Pilot runs under both **Windows PowerShell 5.1** (`powershell.exe`, ships
-in every Windows box) and **PowerShell 7+** (`pwsh.exe`). `VMPilot.bat` and
-`Start-VMPilot` prefer `pwsh` when it's installed and fall back to 5.1.
+VM-Pilot requires **PowerShell 7** (`pwsh.exe`). The manifest declares
+`PowerShellVersion = '7.0'` and `CompatiblePSEditions = @('Core')`, so
+importing it under Windows PowerShell 5.1 fails up front with a clear error
+rather than misbehaving later. `VMPilot.bat` checks for `pwsh` and tells you
+how to install it instead of silently falling back to 5.1, and
+`Start-VMPilot` always launches the GUI with `pwsh.exe`.
 
-The one thing to know: the two read script files differently. PowerShell 7
-defaults to **UTF-8**; Windows PowerShell 5.1 defaults to the legacy
-**Windows-1252** codepage *unless the file carries a UTF-8 byte-order mark
-(BOM)*. The bundled `.ps1`/`.psd1`/`.psm1` files contain non-ASCII
-characters (em-dashes, etc.) and are therefore saved **UTF-8 with a BOM** so
-5.1 parses them correctly. Two practical consequences:
+Install PowerShell 7 with `winget install --id Microsoft.PowerShell`, or from
+<https://aka.ms/powershell>.
 
-- **Launch either way.** `powershell.exe -File .\VMPilot.GUI.ps1` and
-  `pwsh -File .\VMPilot.GUI.ps1` both work.
-- **If you edit a script, keep the BOM.** Some editors/formatters silently
-  re-save UTF-8 *without* a BOM; under 5.1 that reintroduces parser errors
-  on the non-ASCII characters. Save as "UTF-8 with BOM", or just run the
-  edited file under `pwsh`. The in-VM scripts (`AutopilotEnroll.GUI.ps1`,
-  `VMPilotCollect.ps1`) run under the VM's 5.1, so this applies to them too.
+**The in-VM scripts are the exception.** `VMPilotCollect.ps1`,
+`AutopilotEnroll.GUI.ps1` and `AutopilotV2Import.ps1` run inside the VM under
+the Windows PowerShell 5.1 that ships in the image — there is no `pwsh` there,
+and installing one into a throwaway VM isn't worth it. Keep those three
+5.1-compatible, and keep their **UTF-8 BOM**: 5.1 reads a BOM-less file as
+Windows-1252 and chokes on the non-ASCII characters. Some editors silently
+re-save without a BOM, so save as "UTF-8 with BOM" when you edit them.
 
 ## Troubleshooting
 

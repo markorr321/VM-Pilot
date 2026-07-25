@@ -1,5 +1,4 @@
-﻿
-<#
+﻿<#
 .SYNOPSIS
   Downloads a Windows 11 ISO (25H2, current channel) and builds a Gen-2/UEFI VHDX.
 

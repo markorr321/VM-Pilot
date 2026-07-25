@@ -9,8 +9,8 @@
     Description       = 'WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware hashes. Offline mode writes a CSV; Online mode wraps Andrew Taylor''s community AutoPilot script for in-VM Intune import.'
 
     # ----- Compatibility -----
-    PowerShellVersion = '5.1'
-    CompatiblePSEditions = @('Desktop','Core')
+    PowerShellVersion = '7.0'
+    CompatiblePSEditions = @('Core')
 
     # ----- Exports -----
     FunctionsToExport = @('Start-VMPilot')
@@ -45,6 +45,21 @@
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
 0.5.0
+- VM-Pilot now requires PowerShell 7. The manifest declares PowerShellVersion
+  7.0 / CompatiblePSEditions Core, so importing under Windows PowerShell 5.1
+  fails immediately with a clear message instead of misbehaving later.
+  VMPilot.bat no longer falls back to powershell.exe - it reports that pwsh is
+  missing and how to install it. The in-VM scripts still target the 5.1 that
+  ships in the Windows image, since VMs have no pwsh.
+- Start-VMPilot checks PowerShell Gallery for a newer version on each run and
+  offers to install it, matching the Entra-PIM behaviour. It reads the version
+  from the Gallery page's redirect (~350 ms) rather than Find-Module, updates
+  with Update-PSResource or Update-Module to match however the module was
+  installed, and asks before doing anything. Every failure path is silent, so
+  an offline host or Gallery outage never blocks the GUI. Set
+  $env:VMPILOT_DISABLE_UPDATE_CHECK = 'true' to skip the check. The prompt runs
+  before the GUI process spawns, because Start-VMPilot detaches the GUI and
+  returns immediately - there is no console to prompt on afterwards.
 - The offline output folder is renamed C:\Autopilot HWID Collection ->
   C:\Autopilot CSV Collection, since it now holds identifier CSVs as well as
   hash CSVs. Existing files in the old folder are left where they are.
