@@ -93,6 +93,7 @@ from WMI only, so neither needs network access inside the VM.
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
 | `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize. Writes the v1 hash CSV (optional Group Tag column) or, with `-Identifier`, the v2 `Manufacturer,Model,Serial` CSV. |
+| `Invoke-VMPilotCloudCleanup.ps1` | Runner behind the VM Cleanup dialog's **Also remove tenant records** option. Hands the VMs' BIOS serials to the `AutopilotCleanup` module's `Invoke-AutopilotCleanup` in a PowerShell 7 window — see [Removing tenant records](#removing-tenant-records-cleanup-vms). `-Preview` resolves and reports without deleting. |
 | `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and any cached community script for a clean re-run. |
 | `LICENSE`                     | MIT.                                                                          |
 | `README.md`                   | This file.                                                                    |
@@ -267,9 +268,9 @@ dialog can delete those at the same time it removes the local VM:
    Leave it unchecked to remove the VM locally only.
 3. Confirm. VM-Pilot reads each VM's BIOS serial *before* deleting it (the same
    serial Autopilot registered), removes the VM locally, then opens a
-   **PowerShell 7** window that runs the `AutopilotCleanup` module's
-   `Invoke-AutopilotCleanup` against those serials. At its action menu, choose
-   **[1] Remove records only**.
+   **PowerShell 7** window running `Invoke-VMPilotCloudCleanup.ps1`, which calls
+   the `AutopilotCleanup` module's `Invoke-AutopilotCleanup` against those
+   serials. At its action menu, choose **[1] Remove records only**.
 4. The module signs you in to Microsoft Graph, resolves each serial across all
    three services (Autopilot → Intune → Entra ID), deletes in order, then
    **monitors** removal live in the terminal (*Waiting for 1 of 1 to be removed
