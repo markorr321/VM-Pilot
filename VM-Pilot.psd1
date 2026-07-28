@@ -1,12 +1,12 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.5.0'
+    ModuleVersion     = '0.6.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
     Copyright         = '(c) Mark Orr. All rights reserved.'
-    Description       = 'WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware hashes. Offline mode writes a CSV; Online mode wraps Andrew Taylor''s community AutoPilot script for in-VM Intune import.'
+    Description       = 'WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware hashes. Offline mode writes a CSV; Online mode drops a single C:\import.bat that installs Get-WindowsAutopilotImportGUICommunity for in-VM Intune import (AutoPilot v1 and v2).'
 
     # ----- Compatibility -----
     PowerShellVersion = '7.0'
@@ -28,8 +28,6 @@
         'VM-Pilot.psm1',
         'VMPilot.GUI.ps1',
         'VMPilotCollect.ps1',
-        'AutopilotEnroll.GUI.ps1',
-        'AutopilotV2Import.ps1',
         'Get-Win11VHDX.ps1',
         'Invoke-VMPilotCloudCleanup.ps1',
         'Reset-VMPilot.ps1',
@@ -44,6 +42,32 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.6.0
+- Every window now draws from one shared dark ResourceDictionary, ported from
+  Get-WindowsAutopilotImportGUICommunity's Dark.xaml so the two tools match.
+  The seven [System.Windows.MessageBox] prompts - light-grey system boxes in a
+  dark app - are replaced by a themed Show-VMPilotDialog with an optional
+  selectable monospaced detail block, so a VM list, a path or a dism error can
+  be copied out of the prompt instead of retyped. Destructive confirms get an
+  outlined red button, Esc cancels, Enter confirms. The VM Cleanup dialog, the
+  ISO wizard and the Hyper-V enable prompts pick up the same buttons, check
+  boxes, list rows and scrollbars.
+- Online mode now injects ONE entry point: C:\import.bat. It replaces
+  C:\importv1.bat and C:\importv2.bat. Run it from the OOBE Shift+F10 prompt;
+  it primes NuGet, trusts PSGallery, installs the
+  Get-WindowsAutopilotImportGUICommunity script from the PowerShell Gallery,
+  and launches it. That single self-contained GUI covers both Autopilot v1
+  (hardware hash, Group Tag, Assigned User, profile-assignment poll, reboot
+  into enrollment) and v2 (Device preparation identifier), so you pick the
+  version in the VM instead of picking a .bat.
+- Because the import GUI ships from the Gallery, VM-Pilot no longer downloads
+  Andrew Taylor's community script on the host, no longer caches it at
+  C:\Tools\VMPilot, and no longer injects it (or the bundled
+  AutopilotEnroll.GUI.ps1 / AutopilotV2Import.ps1, both removed) into each
+  VHDX. VM builds are faster and the host needs no internet for Online mode.
+  The VM does: C:\import.bat installs from the Gallery on first run.
+- Offline mode is unchanged.
+
 0.5.0
 - VM-Pilot now requires PowerShell 7. The manifest declares PowerShellVersion
   7.0 / CompatiblePSEditions Core, so importing under Windows PowerShell 5.1

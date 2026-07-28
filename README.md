@@ -10,7 +10,8 @@
 
 WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware
 hashes — either as a CSV on disk (Offline) or imported directly into Intune
-AutoPilot from inside the VM via Andrew Taylor's community script (Online).
+AutoPilot from inside the VM via the `Get-WindowsAutopilotImportGUICommunity`
+GUI, which fronts Andrew Taylor's community script (Online).
 
 ## What it does
 
@@ -55,47 +56,32 @@ from WMI only, so neither needs network access inside the VM.
 ### Online mode (Intune AutoPilot import)
 
 - VM lands at the **OOBE region screen** and **never leaves OOBE state**.
-- You press **`Shift+F10`** in vmconnect and run **`C:\importv1.bat`**.
-- The bat pre-installs the NuGet provider + trusts PSGallery silently,
-  then launches a small dark WPF window (`AutopilotEnroll.GUI.ps1`) with
-  optional Group Tag and Assigned User UPN inputs.
-- Click **ENROLL DEVICE** → the community script
-  (`Get-WindowsAutopilotInfoCommunity.ps1`) runs in a visible PowerShell
-  window with `-Online -Assign -Reboot`.
+- VM-Pilot injects a **single** entry point: **`C:\import.bat`**.
+- You press **`Shift+F10`** in vmconnect and run **`C:\import.bat`**. It primes
+  the NuGet provider, trusts PSGallery, then installs and launches
+  [`Get-WindowsAutopilotImportGUICommunity`](https://www.powershellgallery.com/packages/Get-WindowsAutopilotImportGUICommunity)
+  from the PowerShell Gallery (first run only — the VM needs internet).
+- That script is a single self-contained dark WPF window fronting Andrew
+  Taylor's community AutoPilot engine, and it covers **both** registration
+  modes, so you pick v1 or v2 *in the VM* rather than picking a `.bat`:
+
+| Mode in the GUI | Flow | What gets imported |
+| --- | ---- | ------------------ |
+| **v1** | AutoPilot v1 (profile-based) | Hardware hash, + optional Group Tag / Assigned User, waits for profile assignment, reboots into enrollment |
+| **v2** | AutoPilot v2 (Device preparation) | Device identifier `Manufacturer,Model,Serial` |
+
 - A Microsoft sign-in browser opens *inside the VM*. Sign in with an
   Intune admin account (the script will request the right Graph scopes
   on first use).
-- Script uploads the hash, polls `state.deviceImportStatus` until
-  `complete`, triggers AutoPilot sync, polls
-  `deploymentProfileAssignmentStatus` until `assigned`, then
-  `Restart-Computer -Force`. Because OOBE was never completed, the reboot
-  returns to OOBE → AutoPilot detects the now-assigned profile and
-  self-enrolls the device.
-
-### AutoPilot v2 / Device preparation (Online mode)
-
-Online mode also injects a second entry point, **`C:\importv2.bat`**, for
-**Autopilot device preparation (v2)**. v2 does not use a hardware hash — it
-imports the device **identifier** (`Manufacturer,Model,Serial`) instead:
-
-- `Shift+F10` → **`C:\importv2.bat`**.
-- The bat primes NuGet + PSGallery, then runs `AutopilotV2Import.ps1`, which
-  calls `Get-WindowsAutopilotInfoCommunity.ps1 -identifier -Online` against the
-  pre-injected copy at `C:\` (falling back to `Install-Script` from PSGallery
-  if that copy is missing).
-- Sign in when the Microsoft prompt appears; the identifier is posted to
-  `deviceManagement/importedDeviceIdentities`.
-- **Group Tag / Assigned User do not apply to v2.** Device preparation targets
-  an Entra security group on the policy, so add the VM's device object to that
+- **v1:** uploads the hash, polls `state.deviceImportStatus` until `complete`,
+  triggers AutoPilot sync, polls `deploymentProfileAssignmentStatus` until
+  `assigned`, then reboots. Because OOBE was never completed, the reboot
+  returns to OOBE → AutoPilot detects the now-assigned profile and self-enrolls
+  the device.
+- **v2:** posts the identifier to `deviceManagement/importedDeviceIdentities`.
+  **Group Tag / Assigned User do not apply** — device preparation targets an
+  Entra security group on the policy, so add the VM's device object to that
   group after the import, then reboot the VM to restart OOBE.
-
-Both entry points ship on every Online-mode VM, so you can test **v1 and v2**
-from the same image — pick per VM at the Shift+F10 prompt:
-
-| Run | Flow | What gets imported |
-| --- | ---- | ------------------ |
-| `C:\importv1.bat` | AutoPilot v1 (profile-based) | Hardware hash, + optional Group Tag / Assigned User, waits for profile assignment, reboots into enrollment |
-| `C:\importv2.bat` | AutoPilot v2 (Device preparation) | Device identifier `Manufacturer,Model,Serial` |
 
 ## Repo contents
 
@@ -103,13 +89,11 @@ from the same image — pick per VM at the Shift+F10 prompt:
 | ----------------------------- | ----------------------------------------------------------------------------- |
 | `VM-Pilot.psd1`               | PowerShell module manifest. Identity, exports, PSGallery metadata. |
 | `VM-Pilot.psm1`               | Module entry. Exposes the `Start-VMPilot` cmdlet. |
-| `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. |
+| `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. Every window (main, prompts, VM Cleanup, ISO wizard) is built from one shared ResourceDictionary — see [Theme](#theme). |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
 | `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize. Writes the v1 hash CSV (optional Group Tag column) or, with `-Identifier`, the v2 `Manufacturer,Model,Serial` CSV. |
-| `AutopilotEnroll.GUI.ps1`     | Online: small WPF window that runs inside the VM at OOBE Shift+F10, fronts the community script. |
-| `AutopilotV2Import.ps1`       | Online: runs inside the VM at OOBE via `C:\importv2.bat`. AutoPilot v2 / Device preparation — imports the device identifier (`-identifier -Online`). |
-| `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and cached community script for a clean re-run. |
+| `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and any cached community script for a clean re-run. |
 | `LICENSE`                     | MIT.                                                                          |
 | `README.md`                   | This file.                                                                    |
 
@@ -222,10 +206,11 @@ Explorer with the file selected. Errors render in red in the same slot.
   opens: download the official ISO from Microsoft, then **BUILD VHDX FROM
   ISO** (~5-10 min, live apply percentage). When it finishes, the VM build
   continues automatically. The 25H2 parent VHDX is built once and cached.
-- **First Online run** — VM-Pilot also downloads
-  `Get-WindowsAutopilotInfoCommunity.ps1` to `C:\Tools\VMPilot\` (cached).
-- **Every subsequent run** — parent VHDX is reused, community script is reused.
-  VM creation + boot is the only time spent (~5-10 min total per VM).
+- **First Online run** — the host downloads nothing extra; the import GUI is
+  installed from the PowerShell Gallery *inside the VM* the first time you run
+  `C:\import.bat`.
+- **Every subsequent run** — the parent VHDX is reused. VM creation + boot is
+  the only time spent (~5-10 min total per VM).
 
 ## Building media manually (SETUP)
 
@@ -254,21 +239,21 @@ rebuild can replace the parent).
 Once the VM is booted and at OOBE region screen:
 
 1. Press **`Shift+F10`** to open a command prompt.
-2. Run **`C:\importv1.bat`**.
-3. A small **VM-Pilot** window (subtitle: *AutoPilot Import*) appears with
-   the device serial, a Group Tag field, and an Assigned User UPN field
-   (both optional).
-4. Click **ENROLL DEVICE**. A PowerShell window opens showing the community
-   script's live progress.
-5. A Microsoft sign-in browser will open — sign in with your Intune admin.
-6. Watch the upload + assignment poll. When the script reboots the VM,
-   AutoPilot picks up the assigned profile on the next OOBE boot and
-   enrolls the device end-to-end without further interaction.
-
-For **Autopilot v2 (Device preparation)** run **`C:\importv2.bat`** at step 2
-instead — it imports the device identifier rather than the hash and has no
-Group Tag / Assigned User inputs. See *AutoPilot v2 / Device preparation*
-above.
+2. Run **`C:\import.bat`**. On first run it installs
+   `Get-WindowsAutopilotImportGUICommunity` from the PowerShell Gallery
+   (needs internet in the VM), then launches it.
+3. A dark **Autopilot import** window appears with the device serial, the
+   **v1 / v2** mode picker, and (v1 only) optional Group Tag and Assigned
+   User UPN fields.
+4. Pick the mode and start the registration. Live staged progress runs in the
+   window; a Microsoft sign-in browser will open — sign in with your Intune
+   admin.
+5. **v1:** watch the upload + assignment poll. When the script reboots the VM,
+   AutoPilot picks up the assigned profile on the next OOBE boot and enrolls
+   the device end-to-end without further interaction.
+   **v2:** the device identifier is imported; add the device to the Entra
+   security group targeted by your Device preparation policy, then reboot the
+   VM to restart OOBE.
 
 ## Removing tenant records (CLEANUP VMs)
 
@@ -325,6 +310,42 @@ It self-elevates, removes every VM not on its keep list, deletes their
 cached community AutoPilot script. Override the keep list with
 `-Keep @('VM1','VM2',...)`.
 
+## Theme
+
+Every window VM-Pilot shows — the main window, the Hyper-V prompts, the ISO
+wizard, the VM Cleanup dialog and every confirm in between — is built from one
+ResourceDictionary held in `$script:ThemeXaml` and spliced into each window's
+`<Window.Resources>` at the `<!-- @THEME@ -->` token by `Get-ThemedXaml`. Load
+windows with `New-ThemedWindow` rather than `XamlReader::Load` so they pick it
+up. Splicing before parse is deliberate: `StaticResource` only resolves against
+resources that already exist when the tree is built, so merging a dictionary
+afterwards is too late, and a loose script has no `pack://` URI to reference.
+
+The dictionary is ported from
+[`Get-WindowsAutopilotImportGUICommunity`](https://github.com/markorr321/Get-WindowsAutopilotImportCommunity)'s
+`src\Themes\Dark.xaml`, so the two tools read as one family on a technician's
+bench. Everything is hand-templated because WPF's stock templates are
+light-themed — a plain `Background` setter still leaves CheckBoxes, ListBox
+rows and ScrollBars grey-on-white.
+
+Two rules worth keeping:
+
+- **No implicit `<Style TargetType="TextBlock">`.** An implicit TextBlock style
+  also applies to the TextBlock a `ContentPresenter` generates for string
+  content, so a `Foreground` or `FontSize` setter there silently overrides
+  every button and segmented-control template — an unchecked `Segment` would
+  render white instead of `#A8A8A8`. Text styling is keyed only; windows
+  inherit `Foreground` and `FontFamily` from the `Window` element.
+- **Don't set `Foreground` locally on a themed control.** A local value
+  outranks the style's trigger setters, which freezes hover and checked states
+  (this is why `Update-VmList` builds its CheckBoxes without one).
+
+`Show-VMPilotDialog` replaces `[System.Windows.MessageBox]` everywhere. It
+takes `-Title`, `-Message`, an optional selectable monospaced `-Detail` block,
+`-PrimaryText` / `-SecondaryText`, `-Danger` for destructive confirms, and
+`-Owner`; it returns `'Primary'`, `'Secondary'` or `'Closed'`. Enter confirms,
+Esc cancels when a secondary button is present.
+
 ## Output locations
 
 | Mode    | Location                                                                  |
@@ -344,13 +365,14 @@ how to install it instead of silently falling back to 5.1, and
 Install PowerShell 7 with `winget install --id Microsoft.PowerShell`, or from
 <https://aka.ms/powershell>.
 
-**The in-VM scripts are the exception.** `VMPilotCollect.ps1`,
-`AutopilotEnroll.GUI.ps1` and `AutopilotV2Import.ps1` run inside the VM under
-the Windows PowerShell 5.1 that ships in the image — there is no `pwsh` there,
-and installing one into a throwaway VM isn't worth it. Keep those three
-5.1-compatible, and keep their **UTF-8 BOM**: 5.1 reads a BOM-less file as
-Windows-1252 and chokes on the non-ASCII characters. Some editors silently
-re-save without a BOM, so save as "UTF-8 with BOM" when you edit them.
+**The in-VM scripts are the exception.** `VMPilotCollect.ps1` runs inside the
+VM under the Windows PowerShell 5.1 that ships in the image — there is no
+`pwsh` there, and installing one into a throwaway VM isn't worth it (the
+Gallery import GUI that `C:\import.bat` fetches targets 5.1 for the same
+reason). Keep it 5.1-compatible, and keep its **UTF-8 BOM**: 5.1 reads a
+BOM-less file as Windows-1252 and chokes on the non-ASCII characters. Some
+editors silently re-save without a BOM, so save as "UTF-8 with BOM" when you
+edit it.
 
 ## Troubleshooting
 

@@ -7,7 +7,9 @@
       - All Hyper-V VMs except a known "keep" list (your pre-existing VMs).
       - Their C:\VMs\<name>\ folders.
       - The cached parent VHDX (C:\VMs\Win11-25H2.vhdx).
-      - The cached community AutoPilot script (C:\Tools\VMPilot\...).
+      - The cached community AutoPilot script (C:\Tools\VMPilot\...), left
+        behind by VM-Pilot 0.5.0 and earlier. Current versions install the
+        import GUI from PSGallery inside the VM and cache nothing on the host.
 
     Optionally also removes the cached Windows ISO (forces a fresh ~5 GB download
     on the next run -- omit -ResetISO unless you specifically want to test that path).

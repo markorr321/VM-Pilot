@@ -40,69 +40,679 @@ try {
 # --- WPF assemblies -------------------------------------------------------
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 
+# --- Shared dark theme ----------------------------------------------------
+# One dictionary behind every window VM-Pilot shows: the main window, the
+# Hyper-V prompts, the ISO wizard, the VM Cleanup dialog and every modal in
+# between. Ported from Get-WindowsAutopilotImportGUICommunity's
+# src\Themes\Dark.xaml so the two tools read as one family on a technician's
+# bench — that theme's palette and its PrimaryButton / FieldLabel / Segment
+# styles started life here in VM-Pilot, and this brings the rest home.
+#
+# Everything is hand-templated because WPF's stock templates are light-themed:
+# a plain Background setter leaves CheckBoxes, ListBox rows and ScrollBars
+# stubbornly grey-on-white, which is what made [System.Windows.MessageBox]
+# look pasted-in from another decade.
+#
+# Deliberately NO implicit <Style TargetType="TextBlock">. An implicit TextBlock
+# style also applies to the TextBlock a ContentPresenter generates for string
+# content, so a Foreground or FontSize setter there silently overrides every
+# button and segmented-control template — an unchecked Segment would render
+# white instead of #A8A8A8. Text styling is keyed only; windows inherit
+# Foreground and FontFamily from the Window element instead.
+#
+# StaticResource resolves backwards only, so brushes come first.
+$script:ThemeToken = '<!-- @THEME@ -->'
+$script:ThemeXaml = @'
+    <!-- ===================== palette ===================== -->
+    <SolidColorBrush x:Key="WindowBackground"   Color="#161616"/>
+    <SolidColorBrush x:Key="SurfaceBackground"  Color="#1F1F1F"/>
+    <SolidColorBrush x:Key="SurfaceRaised"      Color="#252525"/>
+    <SolidColorBrush x:Key="SurfaceHover"       Color="#2A2A2A"/>
+    <SolidColorBrush x:Key="BorderBrushSubtle"  Color="#2A2A2A"/>
+    <SolidColorBrush x:Key="BorderBrushNormal"  Color="#3A3A3A"/>
+    <SolidColorBrush x:Key="BorderBrushStrong"  Color="#4A4A4A"/>
+
+    <SolidColorBrush x:Key="AccentBrush"        Color="#0078D4"/>
+    <SolidColorBrush x:Key="AccentBrushHover"   Color="#1F8AE0"/>
+    <SolidColorBrush x:Key="AccentBrushPressed" Color="#0061B0"/>
+
+    <SolidColorBrush x:Key="TextPrimary"        Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="TextSecondary"      Color="#C0C0C0"/>
+    <SolidColorBrush x:Key="TextMuted"          Color="#909090"/>
+    <SolidColorBrush x:Key="TextDisabled"       Color="#707070"/>
+
+    <SolidColorBrush x:Key="SuccessBrush"       Color="#107C41"/>
+    <SolidColorBrush x:Key="SuccessBrushHover"  Color="#138A48"/>
+    <SolidColorBrush x:Key="SuccessBrushPressed" Color="#0B5A2F"/>
+    <SolidColorBrush x:Key="SuccessBrushLight"  Color="#1ACB5F"/>
+    <SolidColorBrush x:Key="ErrorBrush"         Color="#F03A47"/>
+    <SolidColorBrush x:Key="ErrorBrushHover"    Color="#FF5560"/>
+    <SolidColorBrush x:Key="ErrorBrushPressed"  Color="#C92B37"/>
+    <SolidColorBrush x:Key="ErrorBrushDim"      Color="#C92B37"/>
+
+    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, Courier New</FontFamily>
+
+    <!-- ===================== text ===================== -->
+    <!-- Uppercase micro-label above an input. -->
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="2,0,0,8"/>
+    </Style>
+
+    <Style x:Key="DialogTitle" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="FontSize" Value="18"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <Style x:Key="DialogMessage" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,10,0,0"/>
+    </Style>
+
+    <Style x:Key="PageSubtitle" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,6,0,0"/>
+    </Style>
+
+    <Style x:Key="HintText" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="2,5,0,0"/>
+    </Style>
+
+    <Style x:Key="StepText" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#E0E0E0"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,0,0,7"/>
+    </Style>
+
+    <!-- ===================== surfaces ===================== -->
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource SurfaceBackground}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Padding" Value="16,14"/>
+    </Style>
+
+    <Style x:Key="Divider" TargetType="Border">
+      <Setter Property="Height" Value="1"/>
+      <Setter Property="Background" Value="{StaticResource BorderBrushSubtle}"/>
+    </Style>
+
+    <!-- ===================== buttons ===================== -->
+    <!-- Main call to action. Dialogs re-use it at Height="36". -->
+    <Style x:Key="PrimaryButton" TargetType="Button">
+      <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Height" Value="52"/>
+      <Setter Property="Padding" Value="20,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentBrushHover}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentBrushPressed}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Toolbar-sized accent button (OPEN AUTOPILOT, REMOVE SELECTED). -->
+    <Style x:Key="PrimaryButtonSmall" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Padding" Value="14,0"/>
+    </Style>
+
+    <!-- Constructive/green: SETUP, BUILD VHDX FROM ISO. -->
+    <Style x:Key="SuccessButton" TargetType="Button">
+      <Setter Property="Background" Value="{StaticResource SuccessBrush}"/>
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Padding" Value="14,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SuccessBrushHover}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SuccessBrushPressed}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Neutral/outlined: CLOSE, EXIT, dialog Cancel. -->
+    <Style x:Key="SecondaryButton" TargetType="Button">
+      <Setter Property="Background" Value="{StaticResource SurfaceBackground}"/>
+      <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushNormal}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Padding" Value="16,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="6" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushStrong}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Destructive confirm inside a dialog: outlined, so it never reads as the
+         safe default the way a solid button does. -->
+    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+      <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource ErrorBrushDim}"/>
+    </Style>
+
+    <!-- Destructive entry point on a toolbar (CLEANUP VMs, REMOVE ALL), where the
+         action still needs to be findable at a glance. -->
+    <Style x:Key="DangerButtonSolid" TargetType="Button" BasedOn="{StaticResource PrimaryButtonSmall}">
+      <Setter Property="Background" Value="{StaticResource ErrorBrush}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource ErrorBrushHover}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource ErrorBrushPressed}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================== segmented control ===================== -->
+    <Style x:Key="Segment" TargetType="RadioButton">
+      <Setter Property="Background" Value="{StaticResource SurfaceBackground}"/>
+      <Setter Property="Foreground" Value="#A8A8A8"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushNormal}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Height" Value="40"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="6" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushStrong}"/>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentBrush}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource WindowBackground}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================== inputs ===================== -->
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource SurfaceBackground}"/>
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushNormal}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="14,11"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="6" SnapsToDevicePixels="True">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Focusable="False"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushStrong}"/>
+              </Trigger>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource WindowBackground}"/>
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Read-only monospaced block: dialog detail, VM lists, command previews.
+         Selectable on purpose — the point of showing a path or a serial is that
+         the tech can copy it. -->
+    <Style x:Key="OutputBox" TargetType="TextBox">
+      <Setter Property="Background" Value="#121212"/>
+      <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Padding" Value="10,8"/>
+      <Setter Property="IsReadOnly" Value="True"/>
+      <Setter Property="IsReadOnlyCaretVisible" Value="False"/>
+      <Setter Property="TextWrapping" Value="NoWrap"/>
+      <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+      <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+      <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="VerticalContentAlignment" Value="Top"/>
+    </Style>
+
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Margin" Value="0,5,0,5"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid Background="Transparent">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Border x:Name="Box" Grid.Column="0" Width="18" Height="18" CornerRadius="4"
+                      Background="{StaticResource SurfaceBackground}"
+                      BorderBrush="{StaticResource BorderBrushNormal}" BorderThickness="1"
+                      VerticalAlignment="Center" SnapsToDevicePixels="True">
+                <Path x:Name="Tick" Data="M 2,6 L 6,10 L 12,2" Stroke="{StaticResource TextPrimary}"
+                      StrokeThickness="2" Visibility="Collapsed"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ContentPresenter Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                RecognizesAccessKey="True"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource BorderBrushStrong}"/>
+                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Box" Property="Background" Value="{StaticResource AccentBrush}"/>
+                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+                <Setter TargetName="Box" Property="Background" Value="{StaticResource WindowBackground}"/>
+                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================== progress ===================== -->
+    <Style TargetType="ProgressBar">
+      <Setter Property="Height" Value="6"/>
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}"/>
+      <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ProgressBar">
+            <Grid>
+              <Border Background="{TemplateBinding Background}" CornerRadius="3"/>
+              <!-- PART_Track / PART_Indicator are required by ProgressBar's
+                   contract; the indeterminate animation drives PART_Indicator. -->
+              <Border x:Name="PART_Track" Background="Transparent"/>
+              <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}"
+                      CornerRadius="3" HorizontalAlignment="Left"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================== scrollbar ===================== -->
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="IsTabStop" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border x:Name="Bd" Background="#3A3A3A" CornerRadius="4" Margin="3,0,3,0"/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#565656"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Width" Value="12"/>
+      <Setter Property="MinWidth" Value="12"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="Transparent">
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource ScrollThumb}"/>
+                </Track.Thumb>
+                <!-- Empty repeat buttons: no classic arrow boxes, but the
+                     page-scroll click targets above and below still work. -->
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Height" Value="12"/>
+                <Setter Property="MinHeight" Value="12"/>
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ScrollViewer">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
+    <!-- ===================== list ===================== -->
+    <!-- Stock ListBoxItem paints a system-blue selection block that survives any
+         Background setter, so the row is fully templated too. -->
+    <Style TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceRaised}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ListBox">
+      <Setter Property="Background" Value="{StaticResource SurfaceBackground}"/>
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSubtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBox">
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="6" SnapsToDevicePixels="True">
+              <ScrollViewer Padding="{TemplateBinding Padding}" Focusable="False">
+                <ItemsPresenter/>
+              </ScrollViewer>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+'@
+
+function Get-ThemedXaml {
+    <#
+    .SYNOPSIS
+        A window's XAML with the shared theme spliced in.
+    .DESCRIPTION
+        StaticResource only resolves against resources that already exist when
+        the tree is built, so merging a dictionary after XamlReader.Load is too
+        late and a loose script has no pack:// URI to reference. The theme is
+        therefore spliced into <Window.Resources> at the @THEME@ token before
+        parsing.
+    #>
+    param([Parameter(Mandatory)][string]$WindowXaml)
+
+    if ($WindowXaml -notmatch [regex]::Escape($script:ThemeToken)) {
+        throw "Window XAML is missing the $script:ThemeToken token, so the theme cannot be applied."
+    }
+    return $WindowXaml.Replace($script:ThemeToken, $script:ThemeXaml)
+}
+
+function New-ThemedWindow {
+    <#
+    .SYNOPSIS
+        Loads themed window XAML into a Window instance.
+    #>
+    param([Parameter(Mandatory)][string]$WindowXaml)
+
+    $doc = New-Object System.Xml.XmlDocument
+    $doc.LoadXml((Get-ThemedXaml -WindowXaml $WindowXaml))
+    return [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $doc))
+}
+
 # --- Hyper-V startup check ------------------------------------------------
 # Module ships via PSGallery; on a fresh install we can't assume Hyper-V is
 # present. Detect early and offer to enable + reboot before any code path
 # tries to call Get-VM.
 
 function Show-VMPilotDialog {
+    <#
+    .SYNOPSIS
+        Themed modal prompt. Returns 'Primary', 'Secondary' or 'Closed'.
+    .DESCRIPTION
+        Replaces [System.Windows.MessageBox], which renders a light-grey box
+        with a system font in the middle of a dark app and cannot show
+        selectable text — which matters when the message carries a path, a
+        serial or a VM list the tech needs to copy.
+
+        Layout matches Show-ApDialog in Get-WindowsAutopilotImportGUICommunity:
+        title, wrapped message, optional monospaced detail block, then the
+        buttons right-aligned with the confirm action last.
+    .PARAMETER Detail
+        Optional selectable, monospaced block below the message.
+    .PARAMETER Danger
+        Style the primary button as destructive (outlined red).
+    #>
     param(
         [Parameter(Mandatory)] [string]$Title,
         [Parameter(Mandatory)] [string]$Message,
+        [string]$Detail,
         [string]$PrimaryText   = 'OK',
         [string]$SecondaryText,
-        [string]$PrimaryColor  = '#0078D4'
+        [switch]$Danger,
+        [int]$Width = 480,
+        $Owner
     )
     $hasSecondary = -not [string]::IsNullOrWhiteSpace($SecondaryText)
-    $secondaryXaml = if ($hasSecondary) {
-@"
-      <Button Grid.Column="0" x:Name="BtnSecondary" Content="$SecondaryText"
-              Width="140" Height="36" Margin="0,0,8,0"
-              Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
-              FontWeight="SemiBold" Cursor="Hand"/>
-"@
-    } else { '' }
+    $primaryStyle = if ($Danger) { 'DangerButton' } else { 'PrimaryButton' }
 
-    [xml]$x = @"
+    $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="$Title" Width="480" SizeToContent="Height"
+        Title="$([System.Security.SecurityElement]::Escape($Title))"
+        SizeToContent="Height" ResizeMode="NoResize" ShowInTaskbar="False"
         WindowStartupLocation="CenterScreen"
         Background="#161616" Foreground="#FFFFFF"
-        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+        FontFamily="Segoe UI Variable, Segoe UI"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    $script:ThemeToken
+  </Window.Resources>
   <Grid Margin="24">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
-    <TextBlock Grid.Row="0" Text="$Title" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
-    <TextBlock Grid.Row="1" x:Name="Body" Foreground="#C0C0C0" FontSize="13"
-               TextWrapping="Wrap" Margin="0,0,0,24"/>
-    <Grid Grid.Row="2">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-$secondaryXaml
-      <Button Grid.Column="2" x:Name="BtnPrimary" Content="$PrimaryText"
-              Width="160" Height="36"
-              Background="$PrimaryColor" Foreground="#FFFFFF" BorderThickness="0"
-              FontWeight="SemiBold" Cursor="Hand"/>
-    </Grid>
+    <TextBlock x:Name="DlgTitle" Grid.Row="0" Style="{StaticResource DialogTitle}"/>
+    <TextBlock x:Name="DlgMessage" Grid.Row="1" Style="{StaticResource DialogMessage}"/>
+    <TextBox   x:Name="DlgDetail" Grid.Row="2" Style="{StaticResource OutputBox}"
+               Margin="0,14,0,0" MaxHeight="220" TextWrapping="Wrap" Visibility="Collapsed"/>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+      <Button x:Name="BtnSecondary" Style="{StaticResource SecondaryButton}"
+              MinWidth="110" Margin="0,0,8,0" Visibility="Collapsed"/>
+      <Button x:Name="BtnPrimary" Style="{StaticResource $primaryStyle}"
+              Height="36" MinWidth="130"/>
+    </StackPanel>
   </Grid>
 </Window>
 "@
-    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
-    $dlg.FindName('Body').Text = $Message
-    $script:__vmpDlgChoice = 'Closed'
-    $dlg.FindName('BtnPrimary').Add_Click({ $script:__vmpDlgChoice = 'Primary';   $dlg.Close() })
-    if ($hasSecondary) {
-        $dlg.FindName('BtnSecondary').Add_Click({ $script:__vmpDlgChoice = 'Secondary'; $dlg.Close() })
+    $dlg = New-ThemedWindow -WindowXaml $x
+    $dlg.Width = $Width
+    if ($Owner) {
+        $dlg.Owner = $Owner
+        $dlg.WindowStartupLocation = 'CenterOwner'
     }
-    [void]$dlg.ShowDialog()
-    return $script:__vmpDlgChoice
+
+    $dlg.FindName('DlgTitle').Text   = $Title
+    $dlg.FindName('DlgMessage').Text = $Message
+
+    if (-not [string]::IsNullOrWhiteSpace($Detail)) {
+        $detailBox = $dlg.FindName('DlgDetail')
+        $detailBox.Text       = $Detail
+        $detailBox.Visibility = 'Visible'
+    }
+
+    # DialogResult is what ShowDialog returns, and setting it closes the window.
+    # Driving the close through DialogResult rather than Close() is what lets the
+    # secondary button be IsCancel (Esc): WPF sets DialogResult itself for an
+    # IsCancel button, and a handler that had already called Close() would then
+    # be setting DialogResult on a closed window, which throws.
+    $btnPrimary = $dlg.FindName('BtnPrimary')
+    $btnPrimary.Content   = $PrimaryText
+    $btnPrimary.IsDefault = $true
+    $btnPrimary.Add_Click({ $dlg.DialogResult = $true }.GetNewClosure())
+
+    $btnSecondary = $dlg.FindName('BtnSecondary')
+    if ($hasSecondary) {
+        $btnSecondary.Content    = $SecondaryText
+        $btnSecondary.Visibility = 'Visible'
+        $btnSecondary.IsCancel   = $true
+    }
+
+    # $null when the window was dismissed with its X rather than a button.
+    $result = $dlg.ShowDialog()
+    if ($result -eq $true)  { return 'Primary' }
+    if ($result -eq $false) { return 'Secondary' }
+    return 'Closed'
 }
 
 function Test-HyperVState {
@@ -132,27 +742,31 @@ function Invoke-EnableHyperVWithProgress {
     # the background. A DispatcherTimer polls the child process so the
     # indeterminate progress bar keeps animating. Returns
     # @{ Success = bool; Error = string }.
-    [xml]$x = @"
+    $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Enabling Hyper-V" Width="440" SizeToContent="Height"
         WindowStartupLocation="CenterScreen"
         Background="#161616" Foreground="#FFFFFF"
-        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    $script:ThemeToken
+  </Window.Resources>
   <Grid Margin="24">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
-    <TextBlock Grid.Row="0" Text="Enabling Hyper-V" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
-    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"
+    <TextBlock Grid.Row="0" Text="Enabling Hyper-V" Style="{StaticResource DialogTitle}"/>
+    <TextBlock Grid.Row="1" Style="{StaticResource DialogMessage}" Margin="0,10,0,18"
                Text="This takes about a minute. Please don't close this window."/>
-    <ProgressBar Grid.Row="2" IsIndeterminate="True" Height="6" Background="#1F1F1F" Foreground="#0078D4" BorderThickness="0"/>
+    <ProgressBar Grid.Row="2" IsIndeterminate="True"/>
   </Grid>
 </Window>
 "@
-    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $dlg = New-ThemedWindow -WindowXaml $x
 
     # Call dism.exe directly. The PowerShell Enable-WindowsOptionalFeature
     # cmdlet relies on DISM COM components that are sometimes misregistered
@@ -222,7 +836,8 @@ switch (Test-HyperVState) {
         if (-not $result -or -not $result.Success) {
             $msg = if ($result) { $result.Error } else { 'Unknown error.' }
             [void](Show-VMPilotDialog -Title 'Enable Failed' `
-                -Message "Failed to enable Hyper-V:`r`n`r`n$msg" -PrimaryText 'OK')
+                -Message 'dism.exe could not enable the Hyper-V feature. Its output is below.' `
+                -Detail $msg -PrimaryText 'OK' -Width 620)
             [Environment]::Exit(1)
         }
 
@@ -253,20 +868,17 @@ $script:SearchPattern      = 'AutoPilotHWID*'   # Offline v1 — hash CSV
 $script:SearchPatternV2    = 'AutoPilotID*'     # Offline v2 — identifier CSV
 $script:SourceFolder       = 'HWID'
 $script:DestinationPath    = 'C:\Autopilot CSV Collection'   # holds both v1 hash and v2 identifier CSVs
-# Community AutoPilot script — pre-cached on the host, injected onto each VM's VHDX
-# at C:\ so the user can run it from OOBE Shift+F10 with a single short command.
-$script:CommunityScriptUrl   = 'https://raw.githubusercontent.com/andrew-s-taylor/WindowsAutopilotInfo/main/Community%20Version/get-windowsautopilotinfocommunity.ps1'
-$script:CommunityScriptCache = 'C:\Tools\VMPilot\Get-WindowsAutopilotInfoCommunity.ps1'
-$script:CommunityScriptInVM  = 'Get-WindowsAutopilotInfoCommunity.ps1'   # lands at C:\<this>
-$script:EnrollGuiInVM        = 'AutopilotEnroll.GUI.ps1'                 # lands at C:\<this>
-$script:EnrollBatInVM        = 'importv1.bat'                           # lands at C:\importv1.bat — AutoPilot v1 (hash + profile assignment)
-$script:EnrollV2ScriptInVM   = 'AutopilotV2Import.ps1'                  # lands at C:\<this>
-$script:EnrollV2BatInVM      = 'importv2.bat'                           # lands at C:\importv2.bat — AutoPilot v2 (Device preparation) import
+# Online mode injects ONE entry point: C:\import.bat. It installs the
+# Get-WindowsAutopilotImportGUICommunity script from PSGallery and runs it —
+# a single self-contained GUI that covers AutoPilot v1 (hardware hash) and v2
+# (Device preparation identifier), so the VM needs no other pre-injected files.
+$script:ImportScriptName = 'Get-WindowsAutopilotImportGUICommunity'
+$script:ImportBatInVM    = 'import.bat'   # lands at C:\import.bat
 $script:CollectScriptInVM    = 'VMPilotCollect.ps1'                      # Offline: lands at C:\<this>, called by SetupComplete.cmd
 $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevices.ReactView/filterOnManualRemediationRequired~/false'
 
 # --- XAML -----------------------------------------------------------------
-[xml]$xaml = @"
+$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VM-Pilot"
@@ -281,114 +893,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
         TextOptions.TextRenderingMode="ClearType">
 
   <Window.Resources>
-    <Style TargetType="TextBox">
-      <Setter Property="Background" Value="#1F1F1F"/>
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-      <Setter Property="BorderBrush" Value="#3A3A3A"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="14,11"/>
-      <Setter Property="FontSize" Value="14"/>
-      <Setter Property="CaretBrush" Value="#FFFFFF"/>
-      <Setter Property="SelectionBrush" Value="#0078D4"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TextBox">
-            <Border x:Name="Bd"
-                    Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="6">
-              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="BorderBrush" Value="#5A5A5A"/>
-              </Trigger>
-              <Trigger Property="IsFocused" Value="True">
-                <Setter TargetName="Bd" Property="BorderBrush" Value="#0078D4"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style x:Key="Segment" TargetType="RadioButton">
-      <Setter Property="Background" Value="#1F1F1F"/>
-      <Setter Property="Foreground" Value="#A8A8A8"/>
-      <Setter Property="BorderBrush" Value="#3A3A3A"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="FontSize" Value="14"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Focusable" Value="False"/>
-      <Setter Property="HorizontalContentAlignment" Value="Center"/>
-      <Setter Property="VerticalContentAlignment" Value="Center"/>
-      <Setter Property="Height" Value="40"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="Bd"
-                    Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="6">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/>
-                <Setter TargetName="Bd" Property="BorderBrush" Value="#4A4A4A"/>
-              </Trigger>
-              <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="#0078D4"/>
-                <Setter TargetName="Bd" Property="BorderBrush" Value="#0078D4"/>
-                <Setter Property="Foreground" Value="#FFFFFF"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style x:Key="PrimaryButton" TargetType="Button">
-      <Setter Property="Background" Value="#0078D4"/>
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="FontSize" Value="15"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Height" Value="52"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="#1F8AE0"/>
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="#0061B0"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/>
-                <Setter Property="Foreground" Value="#707070"/>
-                <Setter Property="Cursor" Value="Arrow"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style x:Key="FieldLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#909090"/>
-      <Setter Property="FontSize" Value="11"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Margin" Value="2,0,0,8"/>
-    </Style>
+    $script:ThemeToken
   </Window.Resources>
 
   <Grid Margin="32,28,32,28">
@@ -486,8 +991,8 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
     </Grid>
 
     <!-- Offline-only fields (toggled by Update-ModeUI). Online mode picks its
-         AutoPilot version and group tag inside the VM instead: importv1.bat /
-         importv2.bat at the OOBE Shift+F10 prompt. -->
+         AutoPilot version and group tag inside the VM instead: run import.bat
+         at the OOBE Shift+F10 prompt and choose v1 or v2 in that GUI. -->
     <StackPanel Grid.Row="4" x:Name="OfflinePanel" Margin="0,0,0,18">
       <TextBlock Text="AUTOPILOT VERSION" Style="{StaticResource FieldLabel}"/>
       <Grid Margin="0,0,0,14">
@@ -528,13 +1033,7 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
                    Foreground="#FFFFFF"
                    Margin="0,0,0,12"
                    TextWrapping="Wrap"/>
-        <ProgressBar x:Name="ActivityBar"
-                     Height="4"
-                     IsIndeterminate="True"
-                     Foreground="#0078D4"
-                     Background="#252525"
-                     BorderThickness="0"
-                     Visibility="Collapsed"/>
+        <ProgressBar x:Name="ActivityBar" Height="4" IsIndeterminate="True" Visibility="Collapsed"/>
       </StackPanel>
 
       <!-- Center stack: Complete (or red error) + the serial number block -->
@@ -588,98 +1087,24 @@ $script:IntuneAutopilotUrl   = 'https://intune.microsoft.com/#view/Microsoft_Int
         </Grid.ColumnDefinitions>
 
         <StackPanel Grid.Column="0" Orientation="Horizontal">
-        <Button x:Name="IntuneButton" Content="OPEN AUTOPILOT"
-                Width="148" Height="36"
-                Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
-                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-          <Button.Template>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#1F8AE0"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#0061B0"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Button.Template>
-        </Button>
-
-        <Button x:Name="IsoWizardButton" Content="SETUP"
-                Width="150" Height="36" Margin="8,0,0,0"
-                Background="#107C41" Foreground="#FFFFFF" BorderThickness="0"
-                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-          <Button.Template>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#138A48"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#0B5A2F"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Button.Template>
-        </Button>
+          <Button x:Name="IntuneButton" Content="OPEN AUTOPILOT" Width="148"
+                  Style="{StaticResource PrimaryButtonSmall}"/>
+          <Button x:Name="IsoWizardButton" Content="SETUP" Width="150" Margin="8,0,0,0"
+                  Style="{StaticResource SuccessButton}"/>
         </StackPanel>
 
-        <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs"
-                Width="132" Height="36"
-                Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0"
-                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-          <Button.Template>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#FF5560"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#C92B37"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Button.Template>
-        </Button>
+        <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs" Width="132"
+                Style="{StaticResource DangerButtonSolid}"/>
 
-        <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT"
-                Width="84" Height="36" Margin="8,0,0,0"
-                Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0"
-                FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-          <Button.Template>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#3A3A3A"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="#1F1F1F"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Button.Template>
-        </Button>
+        <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT" Width="84" Margin="8,0,0,0"
+                Style="{StaticResource SecondaryButton}"/>
       </Grid>
     </Grid>
   </Grid>
 </Window>
 "@
 
-$reader = New-Object System.Xml.XmlNodeReader $xaml
-$window = [Windows.Markup.XamlReader]::Load($reader)
+$window = New-ThemedWindow -WindowXaml $xaml
 
 $VMNameBox      = $window.FindName('VMNameBox')
 $RunButton      = $window.FindName('RunButton')
@@ -806,13 +1231,17 @@ $script:WizApplyTimer = $null
 function Show-Win11IsoWizard {
     $downloadUrl = 'https://www.microsoft.com/en-us/software-download/windows11'
 
-    [xml]$x = @"
+    $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Get Windows 11 Install Media" Width="560" SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         Background="#161616" Foreground="#FFFFFF"
-        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize">
+        FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    $script:ThemeToken
+  </Window.Resources>
   <Grid Margin="24">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -823,74 +1252,42 @@ function Show-Win11IsoWizard {
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <TextBlock Grid.Row="0" Text="Get Windows 11 Install Media" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,6"/>
-    <TextBlock Grid.Row="1" Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"
+    <TextBlock Grid.Row="0" Text="Get Windows 11 Install Media" Style="{StaticResource DialogTitle}" FontSize="20"/>
+    <TextBlock Grid.Row="1" Style="{StaticResource DialogMessage}" Margin="0,8,0,18"
                Text="Download a Windows 11 ISO from Microsoft, then build the VM-Pilot parent VHDX from it. The VHDX is auto-named after the release inside the ISO."/>
 
-    <Border Grid.Row="2" Background="#1B1B1B" CornerRadius="8" Padding="16,14" Margin="0,0,0,18">
+    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,18">
       <StackPanel>
-        <TextBlock Text="1.  Click OPEN DOWNLOAD PAGE below." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, pick &quot;Windows 11 (multi-edition ISO for x64 devices)&quot; from the drop-down, then click Download." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="3.  In &quot;Select the product language&quot;, choose your language and click Confirm. (The page won't download yet - it prepares your link.)" Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="4.  Click the &quot;64-bit Download&quot; button that now appears and save the .iso file. (The link is valid for 24 hours.)" Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,7"/>
-        <TextBlock Text="5.  Once the download is complete, come back here, click BUILD VHDX FROM ISO, pick the file you saved, and wait for the build to finish." Foreground="#E0E0E0" FontSize="13" TextWrapping="Wrap"/>
+        <TextBlock Style="{StaticResource StepText}" Text="1.  Click OPEN DOWNLOAD PAGE below."/>
+        <TextBlock Style="{StaticResource StepText}" Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, pick &quot;Windows 11 (multi-edition ISO for x64 devices)&quot; from the drop-down, then click Download."/>
+        <TextBlock Style="{StaticResource StepText}" Text="3.  In &quot;Select the product language&quot;, choose your language and click Confirm. (The page won't download yet - it prepares your link.)"/>
+        <TextBlock Style="{StaticResource StepText}" Text="4.  Click the &quot;64-bit Download&quot; button that now appears and save the .iso file. (The link is valid for 24 hours.)"/>
+        <TextBlock Style="{StaticResource StepText}" Margin="0" Text="5.  Once the download is complete, come back here, click BUILD VHDX FROM ISO, pick the file you saved, and wait for the build to finish."/>
       </StackPanel>
     </Border>
 
     <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
-      <Button x:Name="BtnOpenPage" Content="OPEN DOWNLOAD PAGE"
-              Width="200" Height="40"
-              Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-        <Button.Template>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#1F8AE0"/></Trigger>
-              <Trigger Property="IsPressed"   Value="True"><Setter TargetName="Bd" Property="Background" Value="#0061B0"/></Trigger>
-              <Trigger Property="IsEnabled"   Value="False"><Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/><Setter Property="Foreground" Value="#707070"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Button.Template>
-      </Button>
-
-      <Button x:Name="BtnBuild" Content="BUILD VHDX FROM ISO" Margin="10,0,0,0"
-              Width="210" Height="40"
-              Background="#107C41" Foreground="#FFFFFF" BorderThickness="0"
-              FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-        <Button.Template>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#138A48"/></Trigger>
-              <Trigger Property="IsPressed"   Value="True"><Setter TargetName="Bd" Property="Background" Value="#0B5A2F"/></Trigger>
-              <Trigger Property="IsEnabled"   Value="False"><Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/><Setter Property="Foreground" Value="#707070"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Button.Template>
-      </Button>
+      <Button x:Name="BtnOpenPage" Content="OPEN DOWNLOAD PAGE" Width="200" Height="40"
+              Style="{StaticResource PrimaryButtonSmall}"/>
+      <Button x:Name="BtnBuild" Content="BUILD VHDX FROM ISO" Width="210" Height="40" Margin="10,0,0,0"
+              Style="{StaticResource SuccessButton}"/>
     </StackPanel>
 
     <StackPanel Grid.Row="4" Margin="0,8,0,0">
       <TextBlock x:Name="WizStatus" Foreground="#C0C0C0" FontSize="12" TextWrapping="Wrap"
                  Visibility="Collapsed" Margin="0,0,0,8"/>
       <ProgressBar x:Name="WizBar" Height="4" IsIndeterminate="True"
-                   Foreground="#107C41" Background="#252525" BorderThickness="0"
+                   Foreground="{StaticResource SuccessBrush}"
                    Visibility="Collapsed"/>
     </StackPanel>
 
-    <Button Grid.Row="5" x:Name="BtnClose" Content="CLOSE"
-            Width="100" Height="32" HorizontalAlignment="Right" Margin="0,16,0,0"
-            Background="#2A2A2A" Foreground="#C0C0C0" BorderThickness="0"
-            FontWeight="SemiBold" Cursor="Hand"/>
+    <Button Grid.Row="5" x:Name="BtnClose" Content="CLOSE" Width="100"
+            HorizontalAlignment="Right" Margin="0,16,0,0"
+            Style="{StaticResource SecondaryButton}"/>
   </Grid>
 </Window>
 "@
-    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $dlg = New-ThemedWindow -WindowXaml $x
     $dlg.Owner = $window
 
     $btnOpen  = $dlg.FindName('BtnOpenPage')
@@ -930,15 +1327,15 @@ function Show-Win11IsoWizard {
             } catch { }
             $deps = @($deps | Select-Object -Unique)
 
-            $names = ($existing | ForEach-Object { $_.Name }) -join ', '
-            $msg = "A parent VHDX already exists: $names`r`n`r`nRebuilding replaces it."
+            $msg    = 'Rebuilding replaces the parent VHDX that already exists.'
+            $detail = ($existing | ForEach-Object { $_.FullName }) -join "`r`n"
             if ($deps.Count) {
-                $msg += "`r`n`r`nThese VM(s) depend on it and must be removed first (CLEANUP VMs), or the rebuild will be blocked:`r`n  $($deps -join ', ')"
+                $msg   += ' The VM(s) listed below depend on it and must be removed first (CLEANUP VMs), or the rebuild will be blocked.'
+                $detail += "`r`n`r`nDependent VMs:`r`n  " + ($deps -join "`r`n  ")
             }
-            $msg += "`r`n`r`nRebuild anyway?"
-            $ans = [System.Windows.MessageBox]::Show($dlg, $msg, 'Parent VHDX already exists',
-                [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
-            if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+            $ans = Show-VMPilotDialog -Title 'Parent VHDX already exists' -Message "$msg`r`n`r`nRebuild anyway?" `
+                -Detail $detail -PrimaryText 'REBUILD' -SecondaryText 'CANCEL' -Danger -Width 560 -Owner $dlg
+            if ($ans -ne 'Primary') { return }
         }
 
         $ofd = New-Object Microsoft.Win32.OpenFileDialog
@@ -1116,13 +1513,13 @@ function Start-Workflow {
     $RunButton.Content      = 'WORKING…'
     $ActivityBar.Visibility = 'Visible'
 
-    # Online mode: VM lands at OOBE region screen (no unattend). We pre-inject
-    # the community script to C:\Get-WindowsAutopilotInfoCommunity.ps1 in the VHDX.
-    # User does SHIFT+F10 in vmconnect and runs ONE line:
-    #   powershell C:\Get-WindowsAutopilotInfoCommunity.ps1 -Online -Reboot [-GroupTag X] [-AssignedUser Y]
-    # Community script handles Connect-MgGraph (browser sign-in), upload, assignment
-    # poll, and -Reboot which returns the VM to OOBE → AutoPilot self-enrolls.
-    # Device never leaves OOBE state.
+    # Online mode: VM lands at OOBE region screen (no unattend). We inject a single
+    # C:\import.bat into the VHDX. User does SHIFT+F10 in vmconnect and runs it:
+    # the bat installs Get-WindowsAutopilotImportGUICommunity from PSGallery and
+    # launches it. That GUI picks v1 (hash) or v2 (identifier), collects Group Tag /
+    # Assigned User, handles Connect-MgGraph (browser sign-in), the upload, the
+    # assignment poll, and the reboot which returns the VM to OOBE → AutoPilot
+    # self-enrolls. Device never leaves OOBE state.
 
     $sharedVars = @{
         VMName              = $vmName
@@ -1141,13 +1538,8 @@ function Start-Workflow {
         SearchPatternV2 = $script:SearchPatternV2
         SourceFolder    = $script:SourceFolder
         DestinationPath = $script:DestinationPath
-        CommunityScriptUrl   = $script:CommunityScriptUrl
-        CommunityScriptCache = $script:CommunityScriptCache
-        CommunityScriptInVM  = $script:CommunityScriptInVM
-        EnrollGuiInVM        = $script:EnrollGuiInVM
-        EnrollBatInVM        = $script:EnrollBatInVM
-        EnrollV2ScriptInVM   = $script:EnrollV2ScriptInVM
-        EnrollV2BatInVM      = $script:EnrollV2BatInVM
+        ImportScriptName     = $script:ImportScriptName
+        ImportBatInVM        = $script:ImportBatInVM
         CollectScriptInVM    = $script:CollectScriptInVM
         Window          = $window
         StatusText      = $StatusText
@@ -1316,25 +1708,12 @@ function Start-Workflow {
             }
 
             # ===== Inject mode-specific payload into the child VHDX =====
-            # Online: pre-injected community AutoPilot script (VM stays at OOBE; user runs via Shift+F10)
+            # Online: single C:\import.bat (VM stays at OOBE; user runs it via Shift+F10)
             # Offline: collection bat + SetupComplete.cmd (VM auto-collects and shuts down)
             $childVhd = (Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1).Path
 
             if ($Online) {
-                Set-Status 'Caching community AutoPilot script…'
-                $cacheDir = Split-Path $CommunityScriptCache -Parent
-                if (-not (Test-Path $cacheDir)) { New-Item -Path $cacheDir -ItemType Directory -Force | Out-Null }
-                if (-not (Test-Path $CommunityScriptCache -PathType Leaf)) {
-                    try {
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        Invoke-WebRequest -Uri $CommunityScriptUrl -OutFile $CommunityScriptCache -UseBasicParsing -ErrorAction Stop
-                    } catch {
-                        Set-Result -Text "Failed to download community script from GitHub: $($_.Exception.Message)"
-                        Restore-Button
-                        return
-                    }
-                }
-                Set-Status 'Injecting community script into VM…'
+                Set-Status 'Injecting AutoPilot import launcher into VM…'
             } else {
                 Set-Status 'Injecting offline collection script into VM…'
                 $collectSrc = Join-Path $ScriptDir $CollectScriptInVM
@@ -1365,50 +1744,27 @@ function Start-Workflow {
                 Start-Sleep -Seconds 1
 
                 if ($Online) {
-                    # Drop the community AutoPilot script + the in-VM enrollment GUI + a one-line .bat
-                    # at C:\ on the VHDX. User runs `C:\importv1.bat` from OOBE Shift+F10 → opens the
-                    # in-VM GUI → user clicks Enroll → community script handles sign-in + upload +
-                    # assignment + -Reboot which returns VM to OOBE → AutoPilot self-enrolls.
-                    Copy-Item -Path $CommunityScriptCache -Destination (Join-Path $mountFolder $CommunityScriptInVM) -Force
-
-                    $enrollGuiSrc = Join-Path $ScriptDir $EnrollGuiInVM
-                    if (-not (Test-Path $enrollGuiSrc -PathType Leaf)) {
-                        throw "In-VM enrollment GUI not found in repo at $enrollGuiSrc"
-                    }
-                    Copy-Item -Path $enrollGuiSrc -Destination (Join-Path $mountFolder $EnrollGuiInVM) -Force
-
-                    # Pre-install NuGet + trust PSGallery so the community script's
-                    # Install-Script call doesn't prompt the user. Then launch the GUI.
+                    # Drop ONE entry point at C:\import.bat on the VHDX. The user runs it
+                    # from the OOBE Shift+F10 prompt; it primes NuGet + trusts PSGallery so
+                    # Install-Script never prompts, installs the single-file
+                    # Get-WindowsAutopilotImportGUICommunity script, and launches it. That
+                    # GUI covers both AutoPilot v1 (hardware hash + Group Tag / Assigned
+                    # User + profile-assignment poll + reboot into enrollment) and v2
+                    # (Device preparation identifier), so nothing else needs injecting.
+                    #
                     # NOTE: `|` is literal inside cmd "..." — do NOT escape with ^|, that
                     # gets passed to PowerShell verbatim and fails to parse.
                     $batContent = @"
 @echo off
-title VM-Pilot AutoPilot v1 Import
-echo Priming PowerShell package management (no interaction needed)...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
-echo Launching AutoPilot Enrollment GUI...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollGuiInVM
+title VM-Pilot AutoPilot Import
+echo.
+echo   VM-Pilot - AutoPilot Import
+echo   Installing $ImportScriptName from the PowerShell Gallery...
+echo   First run only - the VM needs internet access for this step.
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue; if (-not (Get-InstalledScript -Name '$ImportScriptName' -ErrorAction SilentlyContinue)) { Install-Script -Name '$ImportScriptName' -Force -Scope AllUsers -Confirm:`$false }; `$s = Get-InstalledScript -Name '$ImportScriptName' -ErrorAction SilentlyContinue; if (-not `$s) { Write-Host '  Could not install $ImportScriptName - check the VM has internet access.' -ForegroundColor Red; Read-Host '  Press Enter to close'; exit 1 }; & (Join-Path `$s.InstalledLocation '$ImportScriptName.ps1')"
 "@
-                    [IO.File]::WriteAllText((Join-Path $mountFolder $EnrollBatInVM), $batContent, [Text.UTF8Encoding]::new($false))
-
-                    # AutoPilot v2 (Device preparation): imports the device *identifier*
-                    # (Manufacturer,Model,Serial) rather than the hardware hash. Separate
-                    # entry point at C:\importv2.bat so the user picks v1 or v2 at OOBE.
-                    $enrollV2Src = Join-Path $ScriptDir $EnrollV2ScriptInVM
-                    if (-not (Test-Path $enrollV2Src -PathType Leaf)) {
-                        throw "In-VM AutoPilot v2 import script not found in repo at $enrollV2Src"
-                    }
-                    Copy-Item -Path $enrollV2Src -Destination (Join-Path $mountFolder $EnrollV2ScriptInVM) -Force
-
-                    $batV2Content = @"
-@echo off
-title VM-Pilot AutoPilot v2 Import
-echo Priming PowerShell package management (no interaction needed)...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:`$false | Out-Null; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue"
-echo Starting AutoPilot v2 (Device Preparation) import...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\$EnrollV2ScriptInVM
-"@
-                    [IO.File]::WriteAllText((Join-Path $mountFolder $EnrollV2BatInVM), $batV2Content, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText((Join-Path $mountFolder $ImportBatInVM), $batContent, [Text.UTF8Encoding]::new($false))
                 } else {
                     # Offline: copy the collection script + generate SetupComplete.cmd that
                     # invokes it with -GroupTag (omitted if blank). Collection script writes
@@ -1558,7 +1914,7 @@ $RunButton.Add_Click({ Start-Workflow })
 
 # Cleanup hyperlink: opens a modal dialog with all VMs listed for selective or bulk removal
 function Show-CleanupDialog {
-    [xml]$dlgXaml = @"
+    $dlgXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VM Cleanup"
@@ -1566,7 +1922,11 @@ function Show-CleanupDialog {
         WindowStartupLocation="CenterOwner"
         Background="#161616" Foreground="#FFFFFF"
         FontFamily="Segoe UI Variable, Segoe UI"
-        ResizeMode="CanResize">
+        ResizeMode="CanResize"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    $script:ThemeToken
+  </Window.Resources>
   <Grid Margin="24">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -1575,33 +1935,30 @@ function Show-CleanupDialog {
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <TextBlock Grid.Row="0" Text="VM Cleanup" FontSize="22" FontWeight="SemiBold"/>
-    <TextBlock Grid.Row="1" Foreground="#909090" FontSize="12" Margin="0,4,0,16" TextWrapping="Wrap"
+    <TextBlock Grid.Row="0" Text="VM Cleanup" Style="{StaticResource DialogTitle}" FontSize="22"/>
+    <TextBlock Grid.Row="1" Style="{StaticResource PageSubtitle}" FontSize="12" Margin="0,4,0,16"
                Text="Select VMs to remove. Each VM is stopped, deleted from Hyper-V, and its C:\VMs\&lt;name&gt; folder is wiped."/>
 
-    <ListBox Grid.Row="2" x:Name="VmListBox"
-             Background="#1F1F1F" Foreground="#FFFFFF" BorderBrush="#3A3A3A" BorderThickness="1"
-             SelectionMode="Single"/>
+    <ListBox Grid.Row="2" x:Name="VmListBox" SelectionMode="Single"/>
 
     <StackPanel Grid.Row="3" Orientation="Vertical" Margin="0,14,0,0">
-      <CheckBox x:Name="ChkCloud" Foreground="#FFFFFF" Margin="2,0,0,2"
+      <CheckBox x:Name="ChkCloud" Margin="2,0,0,2"
                 Content="Also remove records from Intune / Autopilot / Entra ID (by serial)"/>
-      <TextBlock x:Name="ChkCloudHint" Foreground="#909090" FontSize="11" Margin="24,0,0,10" TextWrapping="Wrap"
+      <TextBlock x:Name="ChkCloudHint" Style="{StaticResource HintText}" Margin="30,0,0,12"
                  Text="Records-only offboard keyed on each VM's BIOS serial. Opens a PowerShell window that signs in to Microsoft Graph (Intune admin required)."/>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-        <Button x:Name="BtnRemoveSelected" Content="REMOVE SELECTED" Width="170" Height="36" Margin="0,0,8,0"
-                Background="#0078D4" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
-        <Button x:Name="BtnRemoveAll" Content="REMOVE ALL" Width="120" Height="36" Margin="0,0,8,0"
-                Background="#F03A47" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
-        <Button x:Name="BtnClose" Content="CLOSE" Width="100" Height="36"
-                Background="#2A2A2A" Foreground="#FFFFFF" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand"/>
+        <Button x:Name="BtnRemoveSelected" Content="REMOVE SELECTED" Width="170" Margin="0,0,8,0"
+                Style="{StaticResource PrimaryButtonSmall}"/>
+        <Button x:Name="BtnRemoveAll" Content="REMOVE ALL" Width="120" Margin="0,0,8,0"
+                Style="{StaticResource DangerButtonSolid}"/>
+        <Button x:Name="BtnClose" Content="CLOSE" Width="100"
+                Style="{StaticResource SecondaryButton}"/>
       </StackPanel>
     </StackPanel>
   </Grid>
 </Window>
 "@
-    $dlgReader = New-Object System.Xml.XmlNodeReader $dlgXaml
-    $dlg = [Windows.Markup.XamlReader]::Load($dlgReader)
+    $dlg = New-ThemedWindow -WindowXaml $dlgXaml
     $dlg.Owner = $window
 
     $VmListBox        = $dlg.FindName('VmListBox')
@@ -1641,7 +1998,8 @@ function Show-CleanupDialog {
             $cb = New-Object System.Windows.Controls.CheckBox
             $cb.Content    = ('{0,-30} {1}' -f $vm.Name, $vm.State)
             $cb.Tag        = $vm.Name
-            $cb.Foreground = '#FFFFFF'
+            # No Foreground here on purpose: a local value outranks the theme's
+            # hover/checked trigger setters, which would freeze the row colour.
             $cb.Margin     = '8,6,8,6'
             $cb.FontFamily = 'Cascadia Mono, Consolas, Courier New'
             $cb.FontSize   = 13
@@ -1686,8 +2044,9 @@ function Show-CleanupDialog {
         param([string[]]$Serials)
         $runner = Join-Path $PSScriptRoot 'Invoke-VMPilotCloudCleanup.ps1'
         if (-not (Test-Path $runner)) {
-            [void][System.Windows.MessageBox]::Show("Cloud cleanup helper not found:`r`n$runner", 'VM Cleanup',
-                [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+            [void](Show-VMPilotDialog -Title 'Cloud cleanup helper not found' `
+                -Message 'Invoke-VMPilotCloudCleanup.ps1 is missing from the VM-Pilot folder, so tenant records were not touched. Reinstall the module to restore it.' `
+                -Detail $runner -Width 560 -Owner $dlg)
             return
         }
         # Each serial as its own double-quoted token, comma-joined into a
@@ -1711,9 +2070,9 @@ function Show-CleanupDialog {
         Update-VmList
         if ($removeCloud) {
             if ($serials.Count -eq 0) {
-                [void][System.Windows.MessageBox]::Show(
-                    'The VM(s) were removed locally, but no BIOS serial could be read for any of them, so no tenant records were touched.',
-                    'VM Cleanup', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+                [void](Show-VMPilotDialog -Title 'No serials to clean up' `
+                    -Message 'The VM(s) were removed locally, but no BIOS serial could be read for any of them, so no tenant records were touched.' `
+                    -Owner $dlg)
                 return
             }
             Start-CloudCleanup -Serials $serials
@@ -1723,17 +2082,18 @@ function Show-CleanupDialog {
     $BtnRemoveSel.Add_Click({
         $names = Get-CheckedNames
         if ($names.Count -eq 0) {
-            [void][System.Windows.MessageBox]::Show('No VMs are checked.', 'VM Cleanup',
-                [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
+            [void](Show-VMPilotDialog -Title 'Nothing selected' `
+                -Message 'No VMs are checked. Tick the ones you want removed, or use REMOVE ALL.' `
+                -Owner $dlg)
             return
         }
-        $msg = "Permanently remove $($names.Count) VM(s)?`r`n`r`n" + ($names -join "`r`n")
+        $msg = "Permanently remove $($names.Count) VM(s)? Each is stopped, deleted from Hyper-V, and its C:\VMs folder is wiped."
         if ($ChkCloud.IsChecked) {
             $msg += "`r`n`r`nAlso DELETE their Intune / Autopilot / Entra ID records (keyed on BIOS serial). This offboards the device from your tenant."
         }
-        $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Cleanup',
-            [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
-        if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        $ans = Show-VMPilotDialog -Title 'Confirm Cleanup' -Message $msg -Detail ($names -join "`r`n") `
+            -PrimaryText 'REMOVE' -SecondaryText 'CANCEL' -Danger -Width 520 -Owner $dlg
+        if ($ans -ne 'Primary') { return }
         Invoke-Removal -Names $names
     })
 
@@ -1743,13 +2103,13 @@ function Show-CleanupDialog {
             if ($item -is [System.Windows.Controls.CheckBox]) { $names += "$($item.Tag)" }
         }
         if ($names.Count -eq 0) { return }
-        $msg = "Permanently remove ALL $($names.Count) VM(s)?`r`n`r`nThis includes VMs you did not create with VM-Pilot."
+        $msg = "Permanently remove ALL $($names.Count) VM(s)? This includes VMs you did not create with VM-Pilot."
         if ($ChkCloud.IsChecked) {
             $msg += "`r`n`r`nAlso DELETE the Intune / Autopilot / Entra ID records for EVERY listed VM's serial. Records for non-VM-Pilot VMs will be removed too."
         }
-        $ans = [System.Windows.MessageBox]::Show($msg, 'Confirm Remove ALL',
-            [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
-        if ($ans -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        $ans = Show-VMPilotDialog -Title 'Confirm Remove ALL' -Message $msg -Detail ($names -join "`r`n") `
+            -PrimaryText 'REMOVE ALL' -SecondaryText 'CANCEL' -Danger -Width 520 -Owner $dlg
+        if ($ans -ne 'Primary') { return }
         Invoke-Removal -Names $names
     })
 
