@@ -462,13 +462,20 @@ edit it.
 
 ## Credits
 
-- **AutoPilot upload + assignment polling** — Andrew Taylor's community
-  fork of Get-WindowsAutopilotInfo:
-  https://github.com/andrew-s-taylor/WindowsAutopilotInfo
-- **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
-  https://github.com/SasStu/HyperV.VMFactory
+Full attribution and licensing for everything VM-Pilot leans on is in
+[LICENSE](LICENSE) under **Third-party components**. None of it is bundled
+here — each piece is installed from the PowerShell Gallery at runtime, direct
+from its publisher.
+
+- **AutoPilot upload + assignment polling** — Andrew Taylor's community fork
+  of `Get-WindowsAutopilotInfo`, itself forked from the original by **Michael
+  Niehaus**: https://github.com/andrew-s-taylor/WindowsAutopilotInfo
+  (**GPL-3.0**)
+- **VM provisioning** — [`HyperV.VMFactory`](https://github.com/SasStu/HyperV.VMFactory)
+  by **Sascha Stumpler** — creates the Gen-2 / Secure Boot / vTPM VM that
+  VM-Pilot boots from the parent VHDX. (**MIT**)
 - **Tenant record cleanup (Intune / Autopilot / Entra ID)** — `AutopilotCleanup`
-  by Mark Orr: https://github.com/markorr321/Autopilot-Cleanup
+  by Mark Orr: https://github.com/markorr321/Autopilot-Cleanup (**MIT**)
 - **Windows media catalog + download URLs** — [`OSD`](https://github.com/OSDeploy/OSD)
   by **David Segura** ([@OSDeploy](https://github.com/OSDeploy)) — the module
   behind **OSDCloud**. VM-Pilot's entire "get Windows media" story is his work:

@@ -19,3 +19,62 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+--------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------
+
+The MIT license above covers VM-Pilot's own code only.
+
+VM-Pilot does not include, bundle, modify, or redistribute any of the
+components below. Each is obtained from the PowerShell Gallery at runtime --
+onto the host machine, or inside the VM -- directly from its publisher, and
+remains subject to its own license. Nothing here is conveyed by VM-Pilot.
+
+
+OSD  --  https://github.com/OSDeploy/OSD
+  David Segura (@OSDeploy).  GPL-3.0.
+
+  The module behind OSDCloud, and the engine behind VM-Pilot's entire
+  "get Windows media" story. VM-Pilot calls its Get-FeatureUpdate cmdlet to
+  resolve Microsoft's official media download URL, filename and SHA256 for a
+  given release, channel and language. Installed on the host, on demand, the
+  first time media is downloaded.
+
+
+HyperV.VMFactory  --  https://github.com/SasStu/HyperV.VMFactory
+  Sascha Stumpler.  MIT.
+
+  Creates the Generation 2 / Secure Boot / vTPM virtual machine that VM-Pilot
+  boots from the parent VHDX. Installed on the host, on demand, on first VM
+  build.
+
+
+Get-WindowsAutopilotImportGUICommunity
+  https://github.com/markorr321/Get-WindowsAutopilotImportCommunity
+
+  The in-VM enrollment GUI used by Online mode. Installed inside the VM from
+  the PowerShell Gallery on first run of C:\import.bat. It fronts Andrew
+  Taylor's community AutoPilot engine (below).
+
+
+Get-WindowsAutopilotInfoCommunity
+  https://github.com/andrew-s-taylor/WindowsAutopilotInfo
+  Andrew Taylor, forked from the original Get-WindowsAutopilotInfo by
+  Michael Niehaus.  GPL-3.0.
+
+  VM-Pilot does not invoke or ship this script. It is named here for
+  completeness because VMPilotCollect.ps1 writes its v2 device-identifier CSV
+  in the same headerless format this script produces with
+  `-identifier -OutputFile`, so the two outputs are interchangeable for
+  Intune's "Import device identifiers" upload; and because Reset-VMPilot.ps1
+  deletes a copy that VM-Pilot 0.5.0 and earlier cached on the host.
+
+
+Microsoft Windows
+
+  Windows and Windows installation media are the property of Microsoft and
+  are governed by Microsoft's own license terms. VM-Pilot neither includes
+  nor redistributes any Microsoft software: media is downloaded by the user,
+  on the user's machine, directly from Microsoft's delivery network.
