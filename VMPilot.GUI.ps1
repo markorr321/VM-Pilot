@@ -851,7 +851,9 @@ switch (Test-HyperVState) {
 }
 
 # --- Constants ------------------------------------------------------------
-$script:BootSource         = 'C:\VMs\Win11-25H2.vhdx'
+# NB: there is no module-wide boot source — the parent VHDX is per-release
+# (C:\VMs\Win11-<release>.vhdx) and resolved in Start-Workflow from the WIN
+# RELEASE selection.
 # Prefer the builder vendored in the module folder; fall back to the legacy
 # C:\Tools\WinVHDX\ location for users who installed the script there before
 # the module wrapper existed.
@@ -938,7 +940,31 @@ $xaml = @"
       <StackPanel Grid.Column="2">
         <TextBlock Text="WIN RELEASE" Style="{StaticResource FieldLabel}"/>
         <Grid>
-          <RadioButton x:Name="Rel25H2" GroupName="Release" Content="25H2" IsChecked="True" IsEnabled="False" Style="{StaticResource Segment}"/>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <RadioButton Grid.Column="0" x:Name="Rel25H2" GroupName="Release" Content="25H2" IsChecked="True" Style="{StaticResource Segment}"/>
+          <RadioButton Grid.Column="2" x:Name="Rel24H2" GroupName="Release" Content="24H2" Style="{StaticResource Segment}"/>
+        </Grid>
+        <!-- Same column layout as the segments above, so the indicator can sit
+             directly under whichever release is selected. Update-ReleaseStatus
+             moves it by setting Grid.Column. Without that the indicator never
+             appears to react when both releases are built, because "Ready" and
+             a green dot look identical for either one. -->
+        <Grid Margin="0,7,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel x:Name="ReleaseStatusPanel" Grid.Column="0" Orientation="Horizontal"
+                      HorizontalAlignment="Center">
+            <Ellipse x:Name="ReleaseDot" Width="10" Height="10" VerticalAlignment="Center"/>
+            <TextBlock x:Name="ReleaseStatus" FontSize="11" Margin="6,0,0,0"
+                       VerticalAlignment="Center" Foreground="#9A9A9A" Text=""/>
+          </StackPanel>
         </Grid>
       </StackPanel>
     </Grid>
@@ -1086,18 +1112,27 @@ $xaml = @"
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
+        <!-- These columns are Auto, so the row sizes to its buttons rather than
+             being clipped to the content area. The old widths summed to 530px
+             inside a ~532px area, leaving 2px of slack: EXIT ended up flush
+             against the window frame instead of on the 24px margin, and any
+             growth (a longer SETUP label, bigger text) pushed it off the edge.
+             These MinWidths total ~492px, so the slack lands in the * column
+             between the two groups and EXIT stays on the margin.
+             EXIT also pins FontSize to 12, because SecondaryButton defaults to
+             13, which made it the odd one out in this row. -->
         <StackPanel Grid.Column="0" Orientation="Horizontal">
-          <Button x:Name="IntuneButton" Content="OPEN AUTOPILOT" Width="148"
+          <Button x:Name="IntuneButton" Content="OPEN AUTOPILOT" MinWidth="140"
                   Style="{StaticResource PrimaryButtonSmall}"/>
-          <Button x:Name="IsoWizardButton" Content="SETUP" Width="150" Margin="8,0,0,0"
+          <Button x:Name="IsoWizardButton" Content="SETUP" MinWidth="132" Margin="8,0,0,0"
                   Style="{StaticResource SuccessButton}"/>
         </StackPanel>
 
-        <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs" Width="132"
+        <Button Grid.Column="2" x:Name="CleanupButton" Content="CLEANUP VMs" MinWidth="124"
                 Style="{StaticResource DangerButtonSolid}"/>
 
-        <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT" Width="84" Margin="8,0,0,0"
-                Style="{StaticResource SecondaryButton}"/>
+        <Button Grid.Column="3" x:Name="ExitButton" Content="EXIT" MinWidth="80" FontSize="12"
+                Margin="8,0,0,0" Style="{StaticResource SecondaryButton}"/>
       </Grid>
     </Grid>
   </Grid>
@@ -1129,6 +1164,11 @@ $CleanupButton    = $window.FindName('CleanupButton')
 $IntuneButton     = $window.FindName('IntuneButton')
 $IsoWizardButton  = $window.FindName('IsoWizardButton')
 $ExitButton       = $window.FindName('ExitButton')
+$Rel25H2          = $window.FindName('Rel25H2')
+$Rel24H2          = $window.FindName('Rel24H2')
+$ReleaseStatus      = $window.FindName('ReleaseStatus')
+$ReleaseDot         = $window.FindName('ReleaseDot')
+$ReleaseStatusPanel = $window.FindName('ReleaseStatusPanel')
 
 # --- Dark title bar (DWM immersive dark mode) -----------------------------
 $window.Add_SourceInitialized({
@@ -1216,25 +1256,72 @@ function Get-CheckedRadio {
     return $Default
 }
 
-# Guided "Get Windows ISO" wizard. Walks the user through downloading a
-# Windows 11 ISO from Microsoft's official page, then runs the builder on
-# the ISO they picked (same code path as Get-Win11VHDX.ps1 -PickIso — the
-# builder auto-detects the release from the ISO and names the VHDX
-# C:\VMs\Win11-<release>.vhdx, exactly where the GUI looks for it). The
+# String-valued sibling of Get-CheckedRadio, for the WIN RELEASE segments —
+# '25H2'/'24H2' aren't integers, so they can't go through the [int[]] version.
+$script:SupportedReleases = @('25H2','24H2')
+function Get-SelectedRelease {
+    foreach ($r in $script:SupportedReleases) {
+        $rb = $window.FindName("Rel$r")
+        if ($rb -and $rb.IsChecked) { return $r }
+    }
+    return $script:SupportedReleases[0]
+}
+
+# Each release has its own parent VHDX, and which one SETUP will build is
+# otherwise invisible -- you could sit on 24H2 with no 24H2 parent and get no
+# hint until the build kicked off. So: say whether the selected release is
+# ready, and name the release on the SETUP button itself. Call this whenever
+# the selection changes or a parent VHDX may have appeared/disappeared.
+function Update-ReleaseStatus {
+    $rel  = Get-SelectedRelease
+    $vhdx = "C:\VMs\Win11-$rel.vhdx"
+    $IsoWizardButton.Content = "SETUP $rel"
+
+    # Park the indicator under the selected segment. Column 0 is the first
+    # release, column 2 the second (column 1 is the 6px gutter), matching the
+    # segment grid above.
+    $idx = [array]::IndexOf($script:SupportedReleases, $rel)
+    [System.Windows.Controls.Grid]::SetColumn($ReleaseStatusPanel, $(if ($idx -le 0) { 0 } else { 2 }))
+    if (Test-Path $vhdx -PathType Leaf) {
+        $ReleaseDot.Fill    = '#3FB950'
+        $ReleaseStatus.Text = 'Ready'
+        $tip                = $vhdx
+    } else {
+        $ReleaseDot.Fill    = '#F03A47'
+        $ReleaseStatus.Text = 'Not built'
+        $tip                = "SETUP $rel will build $vhdx"
+    }
+    # The dot carries the state; the path lives in a tooltip rather than on the
+    # face of the window. The short label stays so the meaning doesn't rest on
+    # colour alone (red/green is the worst pairing for colour-blind users).
+    $ReleaseDot.ToolTip    = $tip
+    $ReleaseStatus.ToolTip = $tip
+}
+
+# "Get Windows 11 Install Media" wizard. The primary path is fully automatic:
+# the builder resolves the selected release's media from Microsoft's Feature Update
+# catalog (via the OSD module), downloads it, verifies its SHA256 and applies
+# it. USE EXISTING ISO is the escape hatch for anyone who already has media, or
+# whose network blocks the download — it feeds the file straight to the builder
+# via -IsoPath. Either way the builder auto-detects the release and names the
+# VHDX C:\VMs\Win11-<release>.vhdx, exactly where the GUI looks for it. The
 # build streams live progress into this window via a runspace + Dispatcher,
-# mirroring Start-Workflow. The file picker runs here on the UI thread
-# (owned by this window) rather than inside the runspace, so it can't pop
-# up behind the wizard.
+# mirroring Start-Workflow.
 $script:WizRunspace  = $null
 $script:WizPSInst    = $null
 $script:WizApplyTimer = $null
 function Show-Win11IsoWizard {
-    $downloadUrl = 'https://www.microsoft.com/en-us/software-download/windows11'
+    # Defaults to whatever WIN RELEASE is selected in the main window, so the
+    # SETUP button and the auto-triggered path always build the same release
+    # the user is about to deploy.
+    param([ValidateSet('25H2','24H2')][string]$Release = (Get-SelectedRelease))
+
+    $targetVhdx = "C:\VMs\Win11-$Release.vhdx"
 
     $x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Get Windows 11 Install Media" Width="560" SizeToContent="Height"
+        Title="Get Windows 11 $Release Install Media" Width="560" SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         Background="#161616" Foreground="#FFFFFF"
         FontFamily="Segoe UI Variable, Segoe UI" ResizeMode="NoResize"
@@ -1252,25 +1339,24 @@ function Show-Win11IsoWizard {
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <TextBlock Grid.Row="0" Text="Get Windows 11 Install Media" Style="{StaticResource DialogTitle}" FontSize="20"/>
+    <TextBlock Grid.Row="0" Text="Get Windows 11 $Release Install Media" Style="{StaticResource DialogTitle}" FontSize="20"/>
     <TextBlock Grid.Row="1" Style="{StaticResource DialogMessage}" Margin="0,8,0,18"
-               Text="Download a Windows 11 ISO from Microsoft, then build the VM-Pilot parent VHDX from it. The VHDX is auto-named after the release inside the ISO."/>
+               Text="Download Windows 11 $Release straight from Microsoft and build the VM-Pilot parent VHDX from it. Nothing to click through - the media is resolved, downloaded, hash-verified and applied for you."/>
 
     <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,18">
       <StackPanel>
-        <TextBlock Style="{StaticResource StepText}" Text="1.  Click OPEN DOWNLOAD PAGE below."/>
-        <TextBlock Style="{StaticResource StepText}" Text="2.  Under &quot;Download Windows 11 Disk Image (ISO) for x64 devices&quot;, pick &quot;Windows 11 (multi-edition ISO for x64 devices)&quot; from the drop-down, then click Download."/>
-        <TextBlock Style="{StaticResource StepText}" Text="3.  In &quot;Select the product language&quot;, choose your language and click Confirm. (The page won't download yet - it prepares your link.)"/>
-        <TextBlock Style="{StaticResource StepText}" Text="4.  Click the &quot;64-bit Download&quot; button that now appears and save the .iso file. (The link is valid for 24 hours.)"/>
-        <TextBlock Style="{StaticResource StepText}" Margin="0" Text="5.  Once the download is complete, come back here, click BUILD VHDX FROM ISO, pick the file you saved, and wait for the build to finish."/>
+        <TextBlock Style="{StaticResource StepText}" Text="1.  Click DOWNLOAD &amp; BUILD below."/>
+        <TextBlock Style="{StaticResource StepText}" Text="2.  VM-Pilot resolves the official $Release media from Microsoft's Feature Update catalog (via the OSD module) and downloads it - roughly 4-6 GB, so allow 10-30 minutes on a typical connection."/>
+        <TextBlock Style="{StaticResource StepText}" Text="3.  The download is checked against Microsoft's published SHA256, then applied to $targetVhdx with a live percentage."/>
+        <TextBlock Style="{StaticResource StepText}" Margin="0" Text="Already have a Windows 11 $Release ISO? Click USE EXISTING ISO instead and pick the file - that skips the download entirely."/>
       </StackPanel>
     </Border>
 
     <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
-      <Button x:Name="BtnOpenPage" Content="OPEN DOWNLOAD PAGE" Width="200" Height="40"
-              Style="{StaticResource PrimaryButtonSmall}"/>
-      <Button x:Name="BtnBuild" Content="BUILD VHDX FROM ISO" Width="210" Height="40" Margin="10,0,0,0"
+      <Button x:Name="BtnBuild" Content="DOWNLOAD &amp; BUILD" Width="200" Height="40"
               Style="{StaticResource SuccessButton}"/>
+      <Button x:Name="BtnUseIso" Content="USE EXISTING ISO" Width="190" Height="40" Margin="10,0,0,0"
+              Style="{StaticResource PrimaryButtonSmall}"/>
     </StackPanel>
 
     <StackPanel Grid.Row="4" Margin="0,8,0,0">
@@ -1290,60 +1376,55 @@ function Show-Win11IsoWizard {
     $dlg = New-ThemedWindow -WindowXaml $x
     $dlg.Owner = $window
 
-    $btnOpen  = $dlg.FindName('BtnOpenPage')
-    $btnBuild = $dlg.FindName('BtnBuild')
-    $btnClose = $dlg.FindName('BtnClose')
+    $btnBuild  = $dlg.FindName('BtnBuild')
+    $btnUseIso = $dlg.FindName('BtnUseIso')
+    $btnClose  = $dlg.FindName('BtnClose')
     $wizStatus = $dlg.FindName('WizStatus')
     $wizBar    = $dlg.FindName('WizBar')
 
-    $btnOpen.Add_Click({
-        try { Start-Process $downloadUrl } catch {
-            $wizStatus.Visibility = 'Visible'
-            $wizStatus.Foreground = '#F03A47'
-            $wizStatus.Text = "Couldn't open the browser. Go to: $downloadUrl"
-        }
-    })
+    # Guard: if this release's parent VHDX already exists, warn BEFORE anything
+    # expensive — ahead of the multi-GB download on one path and ahead of the
+    # file picker on the other. Rebuilding replaces it, and it's blocked
+    # entirely while a VM depends on it, so catch that here instead of after a
+    # doomed build. Best-effort; if Hyper-V queries fail we still warn about
+    # the file existing. Returns $true when the caller should proceed.
+    #
+    # Scoped to $targetVhdx, not every Win11-*.vhdx: releases have separate
+    # parents, so building 24H2 must not warn about an untouched 25H2 parent.
+    function Confirm-WizardRebuild {
+        $existing = @(Get-Item -LiteralPath $targetVhdx -ErrorAction SilentlyContinue)
+        if ($existing.Count -eq 0) { return $true }
 
-    $btnBuild.Add_Click({
-        # Guard: if a parent VHDX already exists, warn BEFORE the file picker
-        # and the build. Rebuilding replaces it, and it's blocked entirely
-        # while a VM depends on it — so catch that here instead of after a
-        # doomed build. Best-effort; if Hyper-V queries fail we still warn
-        # about the file existing.
-        $existing = @(Get-ChildItem 'C:\VMs\Win11-*.vhdx' -File -ErrorAction SilentlyContinue)
-        if ($existing.Count -gt 0) {
-            $deps = @()
-            try {
-                $targets = @($existing | ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) })
-                foreach ($vm in (Get-VM -ErrorAction SilentlyContinue)) {
-                    foreach ($d in (Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)) {
-                        if (-not $d.Path) { continue }
-                        $dpFull = [System.IO.Path]::GetFullPath($d.Path)
-                        $info   = Get-VHD -Path $d.Path -ErrorAction SilentlyContinue
-                        $parent = if ($info -and $info.ParentPath) { [System.IO.Path]::GetFullPath($info.ParentPath) } else { $null }
-                        if (($targets -contains $dpFull) -or ($parent -and ($targets -contains $parent))) { $deps += $vm.Name; break }
-                    }
+        $deps = @()
+        try {
+            $targets = @($existing | ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) })
+            foreach ($vm in (Get-VM -ErrorAction SilentlyContinue)) {
+                foreach ($d in (Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)) {
+                    if (-not $d.Path) { continue }
+                    $dpFull = [System.IO.Path]::GetFullPath($d.Path)
+                    $info   = Get-VHD -Path $d.Path -ErrorAction SilentlyContinue
+                    $parent = if ($info -and $info.ParentPath) { [System.IO.Path]::GetFullPath($info.ParentPath) } else { $null }
+                    if (($targets -contains $dpFull) -or ($parent -and ($targets -contains $parent))) { $deps += $vm.Name; break }
                 }
-            } catch { }
-            $deps = @($deps | Select-Object -Unique)
-
-            $msg    = 'Rebuilding replaces the parent VHDX that already exists.'
-            $detail = ($existing | ForEach-Object { $_.FullName }) -join "`r`n"
-            if ($deps.Count) {
-                $msg   += ' The VM(s) listed below depend on it and must be removed first (CLEANUP VMs), or the rebuild will be blocked.'
-                $detail += "`r`n`r`nDependent VMs:`r`n  " + ($deps -join "`r`n  ")
             }
-            $ans = Show-VMPilotDialog -Title 'Parent VHDX already exists' -Message "$msg`r`n`r`nRebuild anyway?" `
-                -Detail $detail -PrimaryText 'REBUILD' -SecondaryText 'CANCEL' -Danger -Width 560 -Owner $dlg
-            if ($ans -ne 'Primary') { return }
-        }
+        } catch { }
+        $deps = @($deps | Select-Object -Unique)
 
-        $ofd = New-Object Microsoft.Win32.OpenFileDialog
-        $ofd.Filter      = 'Windows ISO (*.iso)|*.iso|All files (*.*)|*.*'
-        $ofd.Title       = 'Select the Windows 11 ISO you downloaded'
-        $ofd.Multiselect = $false
-        if (-not $ofd.ShowDialog($dlg)) { return }
-        $isoPath = $ofd.FileName
+        $msg    = "Rebuilding replaces the Windows 11 $Release parent VHDX that already exists."
+        $detail = ($existing | ForEach-Object { $_.FullName }) -join "`r`n"
+        if ($deps.Count) {
+            $msg   += ' The VM(s) listed below depend on it and must be removed first (CLEANUP VMs), or the rebuild will be blocked.'
+            $detail += "`r`n`r`nDependent VMs:`r`n  " + ($deps -join "`r`n  ")
+        }
+        $ans = Show-VMPilotDialog -Title "$Release parent VHDX already exists" -Message "$msg`r`n`r`nRebuild anyway?" `
+            -Detail $detail -PrimaryText 'REBUILD' -SecondaryText 'CANCEL' -Danger -Width 560 -Owner $dlg
+        return ($ans -eq 'Primary')
+    }
+
+    # Both buttons run the same build; they differ only in where the media
+    # comes from. Empty $IsoPath means "let the builder download it".
+    function Start-WizardBuild {
+        param([string]$IsoPath = '')
 
         if (-not (Test-Path $script:BuilderScript)) {
             $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#F03A47'
@@ -1352,9 +1433,10 @@ function Show-Win11IsoWizard {
         }
 
         # Lock the UI while building; a mid-build close would orphan the runspace.
-        $btnBuild.IsEnabled = $false; $btnBuild.Content = 'BUILDING…'
-        $btnOpen.IsEnabled  = $false; $btnClose.IsEnabled = $false
-        $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#C0C0C0'; $wizStatus.Text = 'Starting build…'
+        $btnBuild.IsEnabled  = $false; $btnBuild.Content = 'BUILDING…'
+        $btnUseIso.IsEnabled = $false; $btnClose.IsEnabled = $false
+        $wizStatus.Visibility = 'Visible'; $wizStatus.Foreground = '#C0C0C0'
+        $wizStatus.Text = if ($IsoPath) { 'Starting build…' } else { 'Preparing download…' }
         $wizBar.Visibility = 'Visible'; $wizBar.IsIndeterminate = $true
 
         $wizState = [hashtable]::Synchronized(@{ Applying = $false })
@@ -1364,10 +1446,11 @@ function Show-Win11IsoWizard {
             Status        = $wizStatus
             Bar           = $wizBar
             BuildBtn      = $btnBuild
-            OpenBtn       = $btnOpen
+            UseIsoBtn     = $btnUseIso
             CloseBtn      = $btnClose
             BuilderScript = $script:BuilderScript
-            IsoPath       = $isoPath
+            IsoPath       = $IsoPath
+            Release       = $Release
             WizState      = $wizState
         }
 
@@ -1398,13 +1481,17 @@ function Show-Win11IsoWizard {
                     $Bar.Visibility = 'Collapsed'
                     $Status.Text = $msg
                     $Status.Foreground = $(if ($ok) { '#3FB950' } else { '#F03A47' })
+                    # CLOSE comes back either way. On failure so the error can be
+                    # dismissed; on success so the user is never stranded when the
+                    # auto-close below doesn't fire — which left the finished
+                    # wizard stuck open with every button greyed out.
+                    $CloseBtn.IsEnabled = $true
                     if (-not $ok) {
                         # Failure: keep the wizard open so the user can read the
                         # error and retry the build.
-                        $OpenBtn.IsEnabled  = $true
-                        $CloseBtn.IsEnabled = $true
-                        $BuildBtn.Content   = 'BUILD VHDX FROM ISO'
-                        $BuildBtn.IsEnabled = $true
+                        $UseIsoBtn.IsEnabled = $true
+                        $BuildBtn.Content    = 'DOWNLOAD & BUILD'
+                        $BuildBtn.IsEnabled  = $true
                     }
                 }) }
             function WClose {
@@ -1419,19 +1506,46 @@ function Show-Win11IsoWizard {
 
             $script:builtPath = $null
             try {
-                # Same code path as Get-Win11VHDX.ps1 -PickIso, but the ISO was
-                # already chosen on the UI thread, so feed it via -IsoPath. No
-                # -OutVhdx → the builder auto-detects the release and names the
-                # VHDX C:\VMs\Win11-<release>.vhdx.
+                # No -OutVhdx → the builder auto-detects the release and names
+                # the VHDX C:\VMs\Win11-<release>.vhdx.
+                #
+                # -IsoPath only when the user picked their own media on the UI
+                # thread; omitting it puts the builder on its OSD download path.
                 #
                 # *>&1 (NOT 2>&1): the builder reports every phase via
                 # Write-Host, which lands on the information stream. Inside a
                 # runspace 2>&1 captures only errors, so the phase lines would
                 # never reach this parser and the bar would sit frozen. *>&1
                 # merges all streams so the status updates actually flow.
-                & $BuilderScript -IsoPath $IsoPath *>&1 | ForEach-Object {
+                # -Release is always passed explicitly: it picks which media to
+                # download, and on the supplied-media path it makes the builder
+                # reject an image from the wrong release rather than quietly
+                # writing a VHDX the GUI won't look for.
+                $builderArgs = @{ Release = $Release }
+                if ($IsoPath) { $builderArgs['IsoPath'] = $IsoPath }
+
+                & $BuilderScript @builderArgs *>&1 | ForEach-Object {
                     $line = "$_"
-                    if     ($line -match 'Using supplied ISO')                 { WSet 'Using supplied ISO…'; WBar -1 }
+                    if     ($line -match 'Installing OSD module')              { WSet 'Installing OSD module…'; WBar -1 }
+                    elseif ($line -match "^Resolving Windows 11")              { WSet 'Resolving media from Microsoft…'; WBar -1 }
+                    elseif ($line -match '^Catalog match: (.+)$')              { WSet "Found: $($Matches[1].Trim())" }
+                    elseif ($line -match 'Verifying cached media')             { WSet 'Verifying cached media…'; WBar -1 }
+                    elseif ($line -match '^Reusing cached media')              { WSet 'Reusing cached media.'; WBar -1 }
+                    elseif ($line -match '^Downloading media')                 { WSet 'Downloading Windows 11 media…'; WBar 0 }
+                    elseif ($line -match '^Download progress: (\d+)% \((\d+) / (\d+) MB\)') {
+                                                                                 $pct = [int]$Matches[1]
+                                                                                 WBar $pct
+                                                                                 WSet "Downloading… $pct%  ($($Matches[2]) / $($Matches[3]) MB)" }
+                    elseif ($line -match '^Download progress: unknown \((\d+) MB') {
+                                                                                 WBar -1
+                                                                                 WSet "Downloading… $($Matches[1]) MB (total size not reported yet)" }
+                    elseif ($line -match '^Download progress: (\d+)')          { $pct = [int]$Matches[1]; WBar $pct; WSet "Downloading… $pct%" }
+                    elseif ($line -match '^Download size verified')            { WSet 'Download complete.' }
+                    elseif ($line -match 'Verifying SHA256')                   { WSet 'Verifying download (SHA256)…'; WBar -1 }
+                    elseif ($line -match 'SHA256 verified')                    { WSet 'Download verified.' }
+                    elseif ($line -match 'no SHA256 for this release')         { WSet 'Downloaded (no catalog hash to verify against).'; WBar -1 }
+                    elseif ($line -match 'Using supplied ISO')                 { WSet 'Using supplied ISO…'; WBar -1 }
+                    elseif ($line -match 'Using downloaded image directly')    { WSet 'Reading downloaded image…'; WBar -1 }
                     elseif ($line -match 'Mounting ISO')                       { WSet 'Mounting ISO…'; WBar -1 }
                     elseif ($line -match 'Detected Windows 11 (\S+)')          { WSet "Detected Windows 11 $($Matches[1]) - building..." }
                     elseif ($line -match 'Output VHDX name set from image: (.+)$') { $script:builtPath = $Matches[1].Trim(); WSet "Target: $script:builtPath" }
@@ -1457,6 +1571,25 @@ function Show-Win11IsoWizard {
         }
         [void]$ps.AddScript($build)
         [void]$ps.BeginInvoke()
+    }
+
+    # Automatic path: builder resolves + downloads the media itself.
+    $btnBuild.Add_Click({
+        if (-not (Confirm-WizardRebuild)) { return }
+        Start-WizardBuild
+    })
+
+    # Bring-your-own-media path. The picker runs here on the UI thread (owned
+    # by this window) rather than inside the runspace, so it can't pop up
+    # behind the wizard.
+    $btnUseIso.Add_Click({
+        if (-not (Confirm-WizardRebuild)) { return }
+        $ofd = New-Object Microsoft.Win32.OpenFileDialog
+        $ofd.Filter      = 'Windows install media (*.iso;*.esd;*.wim)|*.iso;*.esd;*.wim|All files (*.*)|*.*'
+        $ofd.Title       = "Select your Windows 11 $Release install media"
+        $ofd.Multiselect = $false
+        if (-not $ofd.ShowDialog($dlg)) { return }
+        Start-WizardBuild -IsoPath $ofd.FileName
     })
 
     $btnClose.Add_Click({ $dlg.Close() })
@@ -1482,8 +1615,9 @@ function Start-Workflow {
     # ignores the group tag (device preparation has no per-device tag).
     $collectId = (-not $online) -and [bool]$ApV2.IsChecked
     $groupTag  = if ($collectId) { '' } else { $GroupTagBox.Text.Trim() }
-    # WIN RELEASE is fixed at 25H2 — the only supported Windows 11 release.
-    $release    = '25H2'
+    # Each release gets its own parent VHDX, so 25H2 and 24H2 can coexist and
+    # switching between them never rebuilds the other one.
+    $release    = Get-SelectedRelease
     $bootSource = "C:\VMs\Win11-$release.vhdx"
 
     if ([string]::IsNullOrWhiteSpace($vmName)) {
@@ -1498,8 +1632,9 @@ function Start-Workflow {
     # returns, re-check — if the VHDX still isn't there the user cancelled or
     # the build failed, so bail before spawning the VM-creation runspace.
     if (-not (Test-Path $bootSource -PathType Leaf)) {
-        Set-Status -Text 'No 25H2 parent VHDX yet — opening the Windows 11 install-media wizard…'
-        Show-Win11IsoWizard
+        Set-Status -Text "No $release parent VHDX yet — opening the Windows 11 install-media wizard…"
+        Show-Win11IsoWizard -Release $release
+        Update-ReleaseStatus
         if (-not (Test-Path $bootSource -PathType Leaf)) {
             Set-Status -Text 'Parent VHDX not built — cancelled.'
             return
@@ -2120,10 +2255,15 @@ function Show-CleanupDialog {
     Set-Status -Text ''
 }
 
-$CleanupButton.Add_Click({ Show-CleanupDialog })
+$CleanupButton.Add_Click({ Show-CleanupDialog; Update-ReleaseStatus })
 
-# Guided ISO download + parent-VHDX build
-$IsoWizardButton.Add_Click({ Show-Win11IsoWizard })
+# Keep the status line and the SETUP label in step with the release segments.
+$Rel25H2.Add_Checked({ Update-ReleaseStatus })
+$Rel24H2.Add_Checked({ Update-ReleaseStatus })
+
+# Guided media download + parent-VHDX build. Refresh on return: the wizard may
+# have just built the parent this line reports on.
+$IsoWizardButton.Add_Click({ Show-Win11IsoWizard; Update-ReleaseStatus })
 
 # "Open folder" under the saved hardware-hash path: select the .csv in Explorer.
 # The path lives in the shared HashPathText element (set from the workflow
@@ -2147,5 +2287,10 @@ $window.Add_Closing({
     if ($script:PSInst)   { try { $script:PSInst.Stop() | Out-Null; $script:PSInst.Dispose() } catch { } }
     if ($script:Runspace) { try { $script:Runspace.Close(); $script:Runspace.Dispose() } catch { } }
 })
+
+# Paint the initial release status + SETUP label before the window is shown,
+# so the first frame already tells the user which release is selected and
+# whether its parent VHDX exists.
+Update-ReleaseStatus
 
 [void]$window.ShowDialog()
