@@ -1,12 +1,12 @@
 @{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.6.0'
+    ModuleVersion     = '0.7.0'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
     Copyright         = '(c) Mark Orr. All rights reserved.'
-    Description       = 'WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware hashes. Offline mode writes a CSV; Online mode drops a single C:\import.bat that installs Get-WindowsAutopilotImportGUICommunity for in-VM Intune import (AutoPilot v1 and v2).'
+    Description       = 'WPF GUI for spinning up disposable Hyper-V VMs and collecting AutoPilot hardware hashes. Downloads Windows 11 install media (25H2 or 24H2) straight from Microsoft via the OSD module and builds the parent VHDX for you. Offline mode writes a CSV; Online mode drops a single C:\import.bat that installs Get-WindowsAutopilotImportGUICommunity for in-VM Intune import (AutoPilot v1 and v2).'
 
     # ----- Compatibility -----
     PowerShellVersion = '7.0'
@@ -34,16 +34,64 @@
         'Invoke-VMPilotCloudCleanup.ps1',
         'Reset-VMPilot.ps1',
         'VMPilot.bat',
-        'README.md'
+        'README.md',
+        'LICENSE'
     )
 
     # ----- PSGallery metadata -----
     PrivateData = @{
         PSData = @{
-            Tags         = @('Hyper-V','AutoPilot','Intune','WPF','VM','Enrollment','HWID')
+            Tags         = @('Hyper-V','AutoPilot','Intune','WPF','VM','Enrollment','HWID','Windows11','OSD','OSDCloud','VHDX','DevicePreparation')
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.7.0
+- Windows install media is now downloaded for you. VM-Pilot resolves it through
+  David Segura's OSD module - the module behind OSDCloud - whose
+  Get-FeatureUpdate returns Microsoft's official download URL, filename and
+  SHA256 for a given release, channel and language. The SETUP wizard's five
+  manual steps (open Microsoft's download page, pick the edition, pick the
+  language, save the ISO, come back and browse to it) collapse into a single
+  DOWNLOAD & BUILD button. USE EXISTING ISO stays for bring-your-own media, or
+  for networks that block the download. OSD is GPL-3.0, installed from the
+  PowerShell Gallery on demand, and never bundled here - see LICENSE.
+- This retires the Fido resolver, which scraped Microsoft's public download
+  page and failed with error 715-123130 whenever that page IP-blocked the
+  caller.
+- Microsoft's catalog serves an .esd, which is already a Windows image
+  container, so the download path hands the file straight to DISM and skips the
+  ISO mount entirely. Supplied .iso media still mounts as before, and .esd/.wim
+  can now be supplied directly as well.
+- Downloads are verified against the catalog's published SHA256 before the
+  ~10-minute apply starts, and the file is deleted on mismatch so a re-run
+  begins clean. A cached download is reused only while its hash still matches.
+  Note: Microsoft publishes a SHA256 for 25H2 but not for 24H2, and the
+  delivery CDN is HTTP-only (that host refuses TLS), so a 24H2 download is
+  checked for completeness by byte count but cannot be cryptographically
+  verified. The builder says so out loud rather than letting silence imply a
+  passed check. Prefer 25H2, or supply your own 24H2 media, if that matters.
+- 24H2 is selectable again. WIN RELEASE offers 25H2 (default) and 24H2, each
+  with its own parent VHDX (C:\VMs\Win11-<release>.vhdx), so the two coexist
+  and switching never rebuilds the other. Media from a different release than
+  the one selected is rejected instead of quietly building a VHDX the GUI would
+  never look for.
+- A status dot under the selected release shows whether that release's parent
+  VHDX exists, and the SETUP button names the release it will build (SETUP
+  25H2 / SETUP 24H2). The "already exists" rebuild warning is scoped to the
+  selected release instead of every Win11-*.vhdx.
+- Get-Win11VHDX.ps1 gains -OSActivation (Retail by default, or Volume) and
+  -OSLanguage to choose which catalog entry to download. The Fido-only
+  -Language parameter is gone.
+- Fixes: the SETUP wizard left CLOSE disabled after a successful build, so a
+  finished wizard could sit stuck open; a BITS transfer reporting
+  BG_SIZE_UNKNOWN on its first poll overflowed an [int] and aborted the build
+  before any progress appeared; the bottom button row measured 530px inside a
+  520px content area, pushing EXIT past the window margin.
+- LICENSE now carries a THIRD-PARTY COMPONENTS section spelling out that the
+  MIT grant covers VM-Pilot's own code only, and that OSD, HyperV.VMFactory,
+  the in-VM import GUI and Microsoft's media are each obtained at runtime,
+  under their own licenses, and never redistributed here.
+
 0.6.0
 - Every window now draws from one shared dark ResourceDictionary, ported from
   Get-WindowsAutopilotImportGUICommunity's Dark.xaml so the two tools match.
