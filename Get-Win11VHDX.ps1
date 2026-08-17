@@ -1,6 +1,32 @@
 ﻿<#
 .SYNOPSIS
-  Downloads a Windows 11 ISO (25H2, current channel) and builds a Gen-2/UEFI VHDX.
+  Downloads Windows 11 install media (25H2 or 24H2) from Microsoft and builds
+  a Gen-2/UEFI VHDX from it.
+
+.DESCRIPTION
+  With no media parameters the download is fully automatic. The heavy lifting
+  is David Segura's OSD module (github.com/OSDeploy/OSD) -- the module behind
+  OSDCloud -- which supplies Microsoft's Feature Update catalog. Its
+  Get-FeatureUpdate resolves a release/channel/language into a direct download
+  URL on dl.delivery.mp.microsoft.com plus the expected SHA256: the same media
+  Windows Update itself serves. That replaced the old Fido path, which scraped
+  Microsoft's public download page and broke whenever that page IP-blocked the
+  caller (error 715-123130).
+
+  OSD is GPL-3.0 and is installed from PowerShell Gallery at runtime; no part
+  of it is bundled or redistributed with VM-Pilot.
+
+  The catalog serves an .esd. DISM applies an .esd directly, so that path skips
+  the ISO mount entirely. A hand-supplied .iso still works via -IsoPath /
+  -PickIso and is mounted as before.
+
+.EXAMPLE
+  # Fully automatic: download 25H2 media and build C:\VMs\Win11-25H2.vhdx
+  .\Get-Win11VHDX.ps1
+
+.EXAMPLE
+  # Same, for 24H2 -> C:\VMs\Win11-24H2.vhdx. Both parents can coexist.
+  .\Get-Win11VHDX.ps1 -Release 24H2
 
 .EXAMPLE
   .\Get-Win11VHDX.ps1 -Release 25H2 -Edition Pro -OutVhdx C:\VMs\Win11-25H2.vhdx
@@ -10,26 +36,45 @@
   # The VHDX is auto-named after the Windows release detected inside the
   # picked ISO (e.g. C:\VMs\Win11-25H2.vhdx) unless you pin -OutVhdx:
   .\Get-Win11VHDX.ps1 -PickIso
+
+.LINK
+  https://github.com/OSDeploy/OSD
+
+.NOTES
+  Media resolution and download URLs courtesy of the OSD module by David Segura
+  (@OSDeploy), author of OSDCloud. Go star it: https://github.com/OSDeploy/OSD
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('25H2')]        [string]$Release  = '25H2',
+    [ValidateSet('25H2','24H2')] [string]$Release  = '25H2',
     [ValidateSet('Home','Pro')]  [string]$Edition  = 'Pro',
-    [string]$Language = 'English',
+    # Licensing channel for downloaded media. Retail is the default because it
+    # assumes no volume-licensing agreement; pass Volume if you hold one.
+    [ValidateSet('Retail','Volume')] [string]$OSActivation = 'Retail',
+    # Media language, in OSD's culture form (en-us, de-de, fr-fr, ...).
+    # Deliberately not ValidateSet'd here -- OSD owns the authoritative list
+    # and validates it, so this can't drift as that list changes.
+    [string]$OSLanguage = 'en-us',
     [int]   $SizeGB   = 64,
     [string]$WorkDir  = 'C:\Tools\WinVHDX',
     [string]$OutVhdx  = "C:\VMs\Win11-$Release.vhdx",
-    # Pre-supplied ISO. If provided, skips Fido + download entirely and
-    # DISM-applies the existing file. Lets the GUI feed an ISO from any
-    # source (Microsoft Software Download page, Visual Studio, VLSC, USB, etc.).
+    # Pre-supplied media. If provided, skips the download entirely and
+    # DISM-applies the existing file. Lets the GUI feed media from any source
+    # (Microsoft Software Download page, Visual Studio, VLSC, USB, etc.).
+    # An .iso is mounted; an .esd/.wim is applied directly.
     [string]$IsoPath,
-    # Pop a Windows "Open file" dialog to pick the ISO interactively. Sets
+    # Pop a Windows "Open file" dialog to pick the media interactively. Sets
     # $IsoPath from whatever the user selects, then follows the same
-    # supplied-ISO path as -IsoPath (skips Fido + download).
+    # supplied-media path as -IsoPath (skips the download).
     [switch]$PickIso
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Captured before anything can reassign $Release (the detect step below does).
+# Distinguishes "caller asked for this release" from "caller took the default",
+# which decides whether a release mismatch in supplied media is an error.
+$releaseWasExplicit = $PSBoundParameters.ContainsKey('Release')
 
 # --- Admin check ---------------------------------------------------------
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -48,8 +93,8 @@ if ($PickIso -and -not $IsoPath) {
 
     $showDialog = {
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
-        $dlg.Title  = 'Select the Windows ISO to convert'
-        $dlg.Filter = 'Disc image (*.iso)|*.iso|All files (*.*)|*.*'
+        $dlg.Title  = 'Select the Windows install media to convert'
+        $dlg.Filter = 'Windows install media (*.iso;*.esd;*.wim)|*.iso;*.esd;*.wim|All files (*.*)|*.*'
         $dlg.Multiselect = $false
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $dlg.FileName
@@ -74,86 +119,158 @@ if ($PickIso -and -not $IsoPath) {
 New-Item -ItemType Directory -Force $WorkDir            | Out-Null
 New-Item -ItemType Directory -Force (Split-Path $OutVhdx) | Out-Null
 
-# --- Fetch Fido (only external dep) -------------------------------------
-$fido = Join-Path $WorkDir 'Fido.ps1'
-if (-not (Test-Path $fido)) {
-    Write-Host "Fetching Fido..."
-    Invoke-WebRequest 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1' -OutFile $fido
-}
-
-# --- Resolve ISO --------------------------------------------------------
+# --- Resolve install media ----------------------------------------------
 # If -IsoPath was supplied (e.g. a hand-picked ISO from the SETUP wizard), use
-# that and skip the Fido + download flow entirely.
+# that and skip the download flow entirely.
 if ($IsoPath) {
     if (-not (Test-Path $IsoPath -PathType Leaf)) {
         throw "Supplied -IsoPath does not exist: $IsoPath"
     }
-    $iso = $IsoPath
-    Write-Host "Using supplied ISO: $iso"
+    $media = $IsoPath
+    Write-Host "Using supplied ISO: $media"
 } else {
-    $iso = Join-Path $WorkDir "Win11-$Release-$Edition.iso"
-}
-if (-not (Test-Path $iso)) {
-    # Microsoft's public download page now offers only the most-recent
-    # Windows 11 release as a single combined Home/Pro/Edu ISO. Older
-    # tokens like '24H2' and short editions like 'Pro' no longer match
-    # anything in Fido's list. Always ask Fido for Latest + Home/Pro/Edu;
-    # the DISM step below still picks the right edition from install.wim.
-    $fidoRelease = 'Latest'
-    $fidoEdition = 'Home/Pro/Edu'
-    Write-Host "Resolving ISO URL for Windows 11 $fidoRelease $fidoEdition ($Language)..."
-    # Merge all streams (*>&1) so Fido's Write-Host error messages (e.g. the
-    # 715-123130 IP-block notice) are captured alongside the URL on stdout.
-    $fidoOutput = & $fido -Win 11 -Rel $fidoRelease -Ed $fidoEdition -Lang $Language -Arch x64 -GetUrl *>&1 |
-                  ForEach-Object { "$_" }
-    $url = $fidoOutput | Where-Object { $_ -match '^https?://' } | Select-Object -First 1
-    if (-not $url) {
-        $errLines = $fidoOutput | Where-Object { $_ -match 'Error|banned|715-' }
-        $errText  = if ($errLines) { ($errLines -join "`n") } else { ($fidoOutput -join "`n").Trim() }
-        if (-not $errText) { $errText = "(no output from Fido) — try running '.\Fido.ps1 -Win 11' interactively to diagnose." }
-        throw "Fido failed to resolve ISO URL:`n$errText"
-    }
-    Write-Host "Downloading ISO -> $iso"
-    # Use BITS so we can emit real % progress that the GUI parses and shows
-    # on its progress bar. Falls back to Invoke-WebRequest if BITS is broken
-    # or unavailable (rare — BITS is a default Windows service).
-    $useBits = $true
-    try { Import-Module BitsTransfer -ErrorAction Stop } catch { $useBits = $false }
-
-    if ($useBits) {
-        $bitsJob = Start-BitsTransfer -Source $url -Destination $iso -DisplayName 'VMPilot-Win11ISO' -Asynchronous
-        try {
-            while ($bitsJob.JobState -in 'Transferring','Connecting','Queued') {
-                $b = $bitsJob.BytesTransferred
-                $t = $bitsJob.BytesTotal
-                if ($t -gt 0) {
-                    $pct = [int](($b / $t) * 100)
-                    $cur = [int]($b / 1MB)
-                    $tot = [int]($t / 1MB)
-                    Write-Host "ISO progress: $pct% ($cur / $tot MB)"
-                }
-                Start-Sleep -Seconds 2
-            }
-            if ($bitsJob.JobState -eq 'Transferred') {
-                Complete-BitsTransfer -BitsJob $bitsJob
-                Write-Host "ISO progress: 100%"
-            } else {
-                $errDesc = $bitsJob.ErrorDescription
-                Remove-BitsTransfer -BitsJob $bitsJob -ErrorAction SilentlyContinue
-                throw "BITS transfer ended in state '$($bitsJob.JobState)': $errDesc"
-            }
-        } catch {
-            if ($bitsJob) {
-                Get-BitsTransfer -JobId $bitsJob.JobId -ErrorAction SilentlyContinue |
-                    Remove-BitsTransfer -ErrorAction SilentlyContinue
-            }
-            throw
+    # --- Ensure the OSD module ------------------------------------------
+    # OSD carries Microsoft's Feature Update catalog. Get-FeatureUpdate turns
+    # a release/channel/language into a direct dl.delivery.mp.microsoft.com
+    # URL plus the expected SHA256 -- the same media Windows Update serves.
+    if (-not (Get-Module -ListAvailable -Name OSD)) {
+        Write-Host "Installing OSD module from PowerShell Gallery..."
+        # Install-Module bootstraps the NuGet provider with a Y/N prompt on a
+        # clean host. That prompt has no console to render into when the GUI
+        # runs this in a runspace, so it would hang the build -- install the
+        # provider up front instead.
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null
         }
-    } else {
-        Invoke-WebRequest -Uri $url -OutFile $iso
+        Install-Module -Name OSD -Scope CurrentUser -Force -AllowClobber
     }
-} else {
-    Write-Host "Reusing existing ISO: $iso"
+    Import-Module OSD -ErrorAction Stop
+    Write-Host "OSD module version: $((Get-Module OSD).Version)"
+
+    # OSD names releases "Windows 11 <ReleaseID> x64".
+    $osName = "Windows 11 $Release x64"
+    Write-Host "Resolving $osName $OSActivation ($OSLanguage) from Microsoft's catalog..."
+    # Get-FeatureUpdate warns and returns nothing rather than throwing when
+    # it can't match or can't reach the catalog, so check the result.
+    $fu = Get-FeatureUpdate -OSName $osName -OSActivation $OSActivation -OSLanguage $OSLanguage
+    if (-not $fu -or -not $fu.Url) {
+        throw "OSD could not resolve install media for '$osName' ($OSActivation, $OSLanguage). Check internet connectivity, or supply your own media with -PickIso."
+    }
+    Write-Host "Catalog match: $($fu.Name)"
+
+    $media = Join-Path $WorkDir $fu.FileName
+
+    # Reuse a previous download only when it still matches the catalog hash.
+    # A truncated or superseded file would otherwise surface much later as an
+    # opaque DISM failure.
+    $needDownload = $true
+    if (Test-Path $media -PathType Leaf) {
+        if ($fu.SHA256) {
+            Write-Host "Verifying cached media..."
+            if ((Get-FileHash -Path $media -Algorithm SHA256).Hash -ieq $fu.SHA256) {
+                Write-Host "Reusing cached media: $media"
+                $needDownload = $false
+            } else {
+                Write-Warning "Cached media failed its SHA256 check - re-downloading."
+                Remove-Item $media -Force
+            }
+        } else {
+            # No catalog hash to check against (24H2 entries currently ship
+            # without one), so the cached file is taken on trust. Delete it and
+            # re-run, or use -PickIso, if you suspect it.
+            Write-Host "Reusing cached media (unverified - no catalog hash): $media"
+            $needDownload = $false
+        }
+    }
+
+    if ($needDownload) {
+        Write-Host "Downloading media -> $media"
+        # Use BITS so we can emit real % progress that the GUI parses and shows
+        # on its progress bar. Falls back to Invoke-WebRequest if BITS is broken
+        # or unavailable (rare — BITS is a default Windows service).
+        $useBits = $true
+        try { Import-Module BitsTransfer -ErrorAction Stop } catch { $useBits = $false }
+
+        # Content length as reported by the transfer, used for the completeness
+        # check below. 0 means "never learned it".
+        $totalBytes = 0
+
+        if ($useBits) {
+            $bitsJob = Start-BitsTransfer -Source $fu.Url -Destination $media -DisplayName 'VMPilot-Win11Media' -Asynchronous
+            try {
+                # BITS reports BytesTotal as BG_SIZE_UNKNOWN ([uint64]::MaxValue,
+                # 18446744073709551615) until the server's headers arrive -- which
+                # is exactly what the first poll sees while the job is still
+                # Connecting/Queued. Dividing that by 1MB yields 17592186044416,
+                # which overflows [int] and used to abort the whole build. Treat
+                # the sentinel as "size not known yet" and keep going; a real
+                # total lands within a poll or two.
+                $sizeUnknown = [uint64]::MaxValue
+                while ($bitsJob.JobState -in 'Transferring','Connecting','Queued') {
+                    $b = [uint64]$bitsJob.BytesTransferred
+                    $t = [uint64]$bitsJob.BytesTotal
+                    if ($t -gt 0 -and $t -ne $sizeUnknown) {
+                        $totalBytes = $t
+                        $pct = [int](($b / $t) * 100)
+                        $cur = [int64]($b / 1MB)
+                        $tot = [int64]($t / 1MB)
+                        Write-Host "Download progress: $pct% ($cur / $tot MB)"
+                    } else {
+                        Write-Host "Download progress: unknown ($([int64]($b / 1MB)) MB so far)"
+                    }
+                    Start-Sleep -Seconds 2
+                }
+                if ($bitsJob.JobState -eq 'Transferred') {
+                    Complete-BitsTransfer -BitsJob $bitsJob
+                    Write-Host "Download progress: 100%"
+                } else {
+                    $errDesc = $bitsJob.ErrorDescription
+                    Remove-BitsTransfer -BitsJob $bitsJob -ErrorAction SilentlyContinue
+                    throw "BITS transfer ended in state '$($bitsJob.JobState)': $errDesc"
+                }
+            } catch {
+                if ($bitsJob) {
+                    Get-BitsTransfer -JobId $bitsJob.JobId -ErrorAction SilentlyContinue |
+                        Remove-BitsTransfer -ErrorAction SilentlyContinue
+                }
+                throw
+            }
+        } else {
+            Invoke-WebRequest -Uri $fu.Url -OutFile $media
+        }
+
+        # Completeness check: did we get every byte the server promised? This
+        # catches a truncated transfer, which is the failure the SHA256 check
+        # below would otherwise catch -- except that not every catalog entry
+        # has a hash (24H2 currently doesn't), so for those this is the only
+        # check there is. It proves nothing about tampering; only the hash does.
+        if ($totalBytes -gt 0) {
+            $onDisk = (Get-Item $media).Length
+            if ($onDisk -ne $totalBytes) {
+                Remove-Item $media -Force -ErrorAction SilentlyContinue
+                throw "Downloaded media is incomplete: got $onDisk bytes, server reported $totalBytes. The file was deleted - re-run to retry."
+            }
+            Write-Host "Download size verified ($onDisk bytes)."
+        }
+
+        # Verify against the catalog hash before spending 10 minutes applying
+        # a corrupt image. Delete on mismatch so a re-run starts clean rather
+        # than "reusing" the bad file.
+        if ($fu.SHA256) {
+            Write-Host "Verifying SHA256..."
+            $actualHash = (Get-FileHash -Path $media -Algorithm SHA256).Hash
+            if ($actualHash -ine $fu.SHA256) {
+                Remove-Item $media -Force -ErrorAction SilentlyContinue
+                throw "Downloaded media failed SHA256 verification (expected $($fu.SHA256), got $actualHash). The file was deleted - re-run to retry."
+            }
+            Write-Host "SHA256 verified."
+        } else {
+            # Not every catalog entry carries a hash (24H2 currently doesn't).
+            # Say so plainly rather than letting silence imply a passed check --
+            # the transport was still HTTPS-to-Microsoft either way.
+            Write-Warning "Microsoft's catalog published no SHA256 for this release - skipping hash verification."
+        }
+    }
 }
 
 # --- Suppress shell popups for the duration of the build ----------------
@@ -172,24 +289,35 @@ $shellHWWasRunning = [bool]($shellHW -and $shellHW.Status -eq 'Running')
 try {
 if ($shellHWWasRunning) { Stop-Service -Name ShellHWDetection -Force -ErrorAction SilentlyContinue }
 
-# --- Mount ISO and locate install.wim/esd -------------------------------
-Write-Host "Mounting ISO..."
-$isoMount  = Mount-DiskImage -ImagePath $iso -PassThru
-$isoDrive  = ($isoMount | Get-Volume).DriveLetter
-$sources   = "${isoDrive}:\sources"
-$installImg = Get-ChildItem $sources -Filter 'install.*' |
-              Where-Object { $_.Name -in 'install.wim','install.esd' } |
-              Select-Object -First 1
-if (-not $installImg) { throw "No install.wim/install.esd under $sources" }
+# --- Locate the Windows image -------------------------------------------
+# An ISO has to be mounted so we can reach sources\install.wim|esd. Media from
+# Microsoft's Feature Update catalog is already a standalone .esd -- it IS the
+# image container, so DISM reads it directly and no mount is needed.
+$mountedIso = $false
+if ([System.IO.Path]::GetExtension($media) -ieq '.iso') {
+    Write-Host "Mounting ISO..."
+    $isoMount  = Mount-DiskImage -ImagePath $media -PassThru
+    $mountedIso = $true
+    $isoDrive  = ($isoMount | Get-Volume).DriveLetter
+    $sources   = "${isoDrive}:\sources"
+    $installImg = Get-ChildItem $sources -Filter 'install.*' |
+                  Where-Object { $_.Name -in 'install.wim','install.esd' } |
+                  Select-Object -First 1
+    if (-not $installImg) { throw "No install.wim/install.esd under $sources" }
+    $imagePath = $installImg.FullName
+} else {
+    Write-Host "Using downloaded image directly (no ISO mount needed)."
+    $imagePath = $media
+}
 
 # Pick edition index
 $editionName = if ($Edition -eq 'Pro') { 'Windows 11 Pro' } else { 'Windows 11 Home' }
-$imgInfo = Get-WindowsImage -ImagePath $installImg.FullName |
+$imgInfo = Get-WindowsImage -ImagePath $imagePath |
            Where-Object { $_.ImageName -eq $editionName } |
            Select-Object -First 1
 if (-not $imgInfo) {
-    $available = (Get-WindowsImage -ImagePath $installImg.FullName).ImageName -join ', '
-    throw "Edition '$editionName' not found. Available: $available"
+    $available = (Get-WindowsImage -ImagePath $imagePath).ImageName -join ', '
+    throw "Edition '$editionName' not found in $imagePath. Available: $available. Re-run with -Edition set to one of those."
 }
 Write-Host "Using image index $($imgInfo.ImageIndex): $($imgInfo.ImageName)"
 
@@ -200,15 +328,19 @@ Write-Host "Using image index $($imgInfo.ImageIndex): $($imgInfo.ImageName)"
 # to name the VHDX. Only override the name when the caller did NOT pin
 # -OutVhdx explicitly — the GUI always passes -OutVhdx, so it keeps full
 # control of naming; this auto-naming only kicks in on direct invocation.
-$imgDetail = Get-WindowsImage -ImagePath $installImg.FullName -Index $imgInfo.ImageIndex
+$imgDetail = Get-WindowsImage -ImagePath $imagePath -Index $imgInfo.ImageIndex
 $imgBuild  = ([Version]$imgDetail.Version).Build
-if ($imgBuild -eq 26100) {
-    throw "This ISO is Windows 11 24H2 (build 26100). VM-Pilot only supports 25H2 (build 26200) - please supply a 25H2 ISO."
-}
-$buildToRelease = @{ 26200 = '25H2' }
+$buildToRelease = @{ 26200 = '25H2'; 26100 = '24H2' }
 $detectedRelease = $buildToRelease[$imgBuild]
 if ($detectedRelease) {
     Write-Host "Detected Windows 11 $detectedRelease (build $imgBuild) in image."
+    # Downloaded media always matches by construction, but hand-supplied media
+    # can be anything. When the caller named a release explicitly (the GUI
+    # always does, to keep C:\VMs\Win11-<release>.vhdx honest), a mismatch is
+    # an error rather than something to silently rename around.
+    if ($releaseWasExplicit -and $detectedRelease -ne $Release) {
+        throw "Requested -Release $Release but this media is Windows 11 $detectedRelease (build $imgBuild). Supply matching media, or re-run with -Release $detectedRelease."
+    }
     $Release = $detectedRelease
 } else {
     # Unknown/newer build: name it by build number so the file is still
@@ -319,7 +451,7 @@ Write-Host "Applying image (this takes a while)..."
 # we parse and re-emit as "Apply progress: X%" for the GUI pipeline to consume.
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = "$env:SystemRoot\System32\Dism.exe"
-$psi.Arguments              = "/Apply-Image /ImageFile:`"$($installImg.FullName)`" /Index:$($imgInfo.ImageIndex) /ApplyDir:${winLetter}:\"
+$psi.Arguments              = "/Apply-Image /ImageFile:`"$imagePath`" /Index:$($imgInfo.ImageIndex) /ApplyDir:${winLetter}:\"
 $psi.UseShellExecute        = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError  = $true
@@ -409,7 +541,8 @@ if ((Get-VHD -Path $OutVhdx -ErrorAction SilentlyContinue).Attached) {
     throw "Failed to dismount $OutVhdx after build. A process is still holding it open."
 }
 
-Dismount-DiskImage -ImagePath $iso | Out-Null
+# Only the ISO path mounted anything; downloaded .esd media never was.
+if ($mountedIso) { Dismount-DiskImage -ImagePath $media | Out-Null }
 
 Write-Host "`nDone: $OutVhdx" -ForegroundColor Green
 Write-Host "Attach to a Gen-2 Hyper-V VM with Secure Boot + TPM enabled."

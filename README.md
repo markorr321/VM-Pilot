@@ -91,7 +91,7 @@ from WMI only, so neither needs network access inside the VM.
 | `VM-Pilot.psm1`               | Module entry. Exposes the `Start-VMPilot` cmdlet. |
 | `VMPilot.GUI.ps1`             | The host WPF GUI. Dark theme, segmented controls, status + progress + completion. Every window (main, prompts, VM Cleanup, ISO wizard) is built from one shared ResourceDictionary — see [Theme](#theme). |
 | `VMPilot.bat`                 | Thin launcher for double-click use. Auto-elevates and starts the GUI hidden. |
-| `Get-Win11VHDX.ps1`           | Builder. DISM-applies a Windows 11 ISO to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` (skips download), or falls back to Fido. Auto-names the VHDX after the release detected inside the ISO when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
+| `Get-Win11VHDX.ps1`           | Builder. Downloads Windows 11 media from Microsoft (via the [OSD](https://github.com/OSDeploy/OSD) module's Feature Update catalog), SHA256-verifies it, and DISM-applies it to a GPT/UEFI VHDX. Accepts `-IsoPath` / `-PickIso` to use your own media instead. Auto-names the VHDX after the release detected inside the image when `-OutVhdx` isn't pinned, and refuses to overwrite a parent any VM still depends on. |
 | `VMPilotCollect.ps1`          | Offline: runs inside the VM at specialize. Writes the v1 hash CSV (optional Group Tag column) or, with `-Identifier`, the v2 `Manufacturer,Model,Serial` CSV. |
 | `Invoke-VMPilotCloudCleanup.ps1` | Runner behind the VM Cleanup dialog's **Also remove tenant records** option. Hands the VMs' BIOS serials to the `AutopilotCleanup` module's `Invoke-AutopilotCleanup` in a PowerShell 7 window — see [Removing tenant records](#removing-tenant-records-cleanup-vms). `-Preview` resolves and reports without deleting. |
 | `Reset-VMPilot.ps1`           | Standalone cleanup utility. Wipes test VMs, parent VHDX, and any cached community script for a clean re-run. |
@@ -107,19 +107,30 @@ from WMI only, so neither needs network access inside the VM.
   note below.
 - **`HyperV.VMFactory`** PowerShell module — auto-installed from PSGallery on
   first run (`Install-Module -Scope CurrentUser`).
-- **Parent VHDX** — built automatically on first use. When no cached
-  `C:\VMs\Win11-25H2.vhdx` exists, the GUI opens the **Get Windows 11
-  Install Media** wizard:
-  - Guided click-path to download the official **Windows 11 (multi-edition
-    ISO for x64 devices)** from Microsoft's Software Download page
-    (`https://www.microsoft.com/en-us/software-download/windows11`).
-  - Click **BUILD VHDX FROM ISO**, pick the `.iso` you saved, and the
-    builder DISM-applies it to `C:\VMs\Win11-25H2.vhdx` with a live apply
-    percentage. A non-25H2 ISO (e.g. 24H2) is rejected.
+- **[`OSD`](https://github.com/OSDeploy/OSD)** PowerShell module by **David
+  Segura** (the module behind **OSDCloud**) — auto-installed from PSGallery the
+  first time media is downloaded (`Install-Module -Scope CurrentUser`). Supplies
+  Microsoft's Feature Update catalog, which is how VM-Pilot resolves an official
+  download URL + SHA256 without scraping anything. GPL-3.0.
+- **Parent VHDX** — built automatically on first use, one per Windows release.
+  When no cached `C:\VMs\Win11-<release>.vhdx` exists for the release selected
+  under **WIN RELEASE**, the GUI opens the **Get Windows 11 Install Media**
+  wizard:
+  - Click **DOWNLOAD & BUILD**. VM-Pilot resolves the official media for that
+    release from Microsoft's Feature Update catalog, downloads it from
+    `dl.delivery.mp.microsoft.com` (~4–6 GB, live percentage), verifies it
+    against Microsoft's published SHA256 where one is available (see
+    [Release support](#release-support)), and DISM-applies it to
+    `C:\VMs\Win11-<release>.vhdx`.
+  - Already have media? **USE EXISTING ISO** opens a file picker and skips
+    the download. Media from a different release than the one selected is
+    rejected rather than silently building the wrong parent.
   - Once the wizard finishes, the pending VM build continues automatically.
   You can also open this wizard any time with the green **SETUP** button to
-  pre-build the parent VHDX. The 25H2 VHDX is built once and reused.
-- **Internet** — once at first build to download the Windows 11 ISO,
+  pre-build a parent VHDX. Each release's VHDX is built once and reused, and
+  25H2 and 24H2 parents coexist — switching **WIN RELEASE** never rebuilds
+  the other.
+- **Internet** — once at first build to download the Windows 11 media,
   and from inside the VM during Online enrollment so it can
   reach Microsoft Graph.
 - **Intune admin account** (Online mode only) with consent for
@@ -130,11 +141,16 @@ from WMI only, so neither needs network access inside the VM.
 ## Licensing & redistribution
 
 VM-Pilot is MIT-licensed code that **does not include or redistribute any
-Microsoft software**. You download the Windows 11 ISO yourself from
-Microsoft's official [Software Download page](https://www.microsoft.com/en-us/software-download/windows11)
-(the SETUP wizard walks you through it), and `Get-Win11VHDX.ps1` DISM-applies
-that ISO to a local VHDX. Microsoft sees you as the downloader, not VM-Pilot
-or this repo.
+Microsoft software**. The install media is fetched on your machine, over your
+connection, directly from Microsoft's own delivery CDN
+(`dl.delivery.mp.microsoft.com`) — the URL comes from Microsoft's Feature
+Update catalog, surfaced by David Segura's [OSD](https://github.com/OSDeploy/OSD)
+module (GPL-3.0), which VM-Pilot installs from PSGallery at runtime rather than
+bundling. `Get-Win11VHDX.ps1` then DISM-applies that image to a local VHDX.
+Microsoft sees you as the downloader, not VM-Pilot or this repo. Nothing is
+mirrored, re-hosted, or bundled. (On download integrity, see
+[Release support](#release-support) — the CDN is HTTP-only, so the SHA256 check
+is what makes 25H2 the safer default.)
 
 You are responsible for ensuring your Windows licensing covers the VMs you
 create. For short-lived test/eval VMs that exist only long enough to grab a
@@ -177,14 +193,14 @@ console window, then the host workflow takes over. Equivalent to
 | Field                                  | Notes                                                                  |
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | **MODE** — Offline / Online            | Selects which payload to inject into the VM.                            |
-| **WIN RELEASE** — 25H2                  | Windows 11 build used. Fixed at 25H2 (cached parent VHDX).               |
+| **WIN RELEASE** — 25H2 / 24H2          | Windows 11 release the VM is built from. Each has its own cached parent VHDX (`C:\VMs\Win11-<release>.vhdx`) and they coexist, so switching is free once both are built. Defaults to 25H2. |
 | **VM NAME**                            | Hyper-V VM name. Must not collide with an existing VM.                   |
 | **CPU CORES** — 1 / 2 / 4              | Defaults to 2. Bump to 4 for faster boot.                                 |
 | **RAM (GB)** — 4 / 8 / 16              | Defaults to 4. Bump to 8 for faster boot.                                 |
 | **GROUP TAG** *(Offline only)*         | Optional. Adds a `Group Tag` column to the CSV. Leave blank to omit.   |
 | **COLLECT HWID** / **COLLECT & UPLOAD** | Label changes with mode. Kicks off the run.                            |
 | **OPEN AUTOPILOT** *(bottom-left)*     | Launches the Intune AutoPilot Devices page in your default browser.    |
-| **SETUP** *(bottom, green)*            | Opens the **Get Windows 11 Install Media** wizard: guided steps to download an official Microsoft ISO, then builds the parent VHDX from the ISO you pick (live percentage, auto-named by the release inside the ISO). Warns first if a parent VHDX already exists or a VM depends on it. |
+| **SETUP** *(bottom, green)*            | Opens the **Get Windows 11 Install Media** wizard: **DOWNLOAD & BUILD** pulls official 25H2 media from Microsoft and builds the parent VHDX end to end (live download + apply percentages, auto-named by the release inside the image); **USE EXISTING ISO** does the same from media you already have. Warns first if a parent VHDX already exists or a VM depends on it. |
 | **CLEANUP VMs** *(bottom-right, red)*  | Opens a dialog listing every Hyper-V VM with per-row checkboxes plus Remove Selected / Remove All buttons. Each removal stops the VM, deletes it, and wipes its `C:\VMs\<name>` folder. An optional **Also remove records from Intune / Autopilot / Entra ID** checkbox additionally offboards each removed VM's cloud identity (records-only, keyed on BIOS serial) — see [Removing tenant records](#removing-tenant-records-cleanup-vms). |
 | **EXIT** *(bottom-right, gray)*        | Closes the GUI.                                                         |
 
@@ -202,11 +218,13 @@ Explorer with the file selected. Errors render in red in the same slot.
   **ENABLE HYPER-V** runs `dism.exe` in the background (1–3 minutes with an
   animated progress bar), then a **Reboot Required** dialog. After reboot,
   run `Start-VMPilot` again and the check passes silently.
-- **First click of COLLECT HWID** — if no cached parent VHDX exists at
-  `C:\VMs\Win11-25H2.vhdx`, the **Get Windows 11 Install Media** wizard
-  opens: download the official ISO from Microsoft, then **BUILD VHDX FROM
-  ISO** (~5-10 min, live apply percentage). When it finishes, the VM build
-  continues automatically. The 25H2 parent VHDX is built once and cached.
+- **First click of COLLECT HWID** — if no cached parent VHDX exists for the
+  selected **WIN RELEASE** (`C:\VMs\Win11-<release>.vhdx`), the **Get Windows
+  11 Install Media** wizard opens. **DOWNLOAD & BUILD** handles it end to end:
+  ~10-30 min for the media download (live percentage) plus ~5-10 min for the
+  apply. When it finishes, the VM build continues automatically. Each
+  release's parent VHDX is built once and cached, and the downloaded media is
+  kept under `C:\Tools\WinVHDX` so a rebuild never re-downloads.
 - **First Online run** — the host downloads nothing extra; the import GUI is
   installed from the PowerShell Gallery *inside the VM* the first time you run
   `C:\import.bat`.
@@ -216,20 +234,61 @@ Explorer with the file selected. Errors render in red in the same slot.
 ## Building media manually (SETUP)
 
 The green **SETUP** button is an on-demand alternative to the auto-triggered
-build dialog — useful for pre-building a parent VHDX, or when you'd rather
-grab the official Microsoft ISO yourself:
+build dialog — useful for pre-building a parent VHDX ahead of time.
 
-1. Click **SETUP** → the **Get Windows 11 Install Media** wizard opens with
-   numbered steps and an **OPEN DOWNLOAD PAGE** button (Microsoft's Software
-   Download page).
-2. Follow the steps to download a **Windows 11 (multi-edition ISO for x64
-   devices)** — choose the product language → Confirm → 64-bit Download.
-3. Click **BUILD VHDX FROM ISO**, pick the `.iso` you saved, and watch the
-   live status: *Mounting ISO… → Detected Windows 11 25H2 → Applying Windows
-   image… NN% → Writing UEFI… → Finalizing*.
-4. The VHDX is auto-named from the release inside the ISO
-   (`C:\VMs\Win11-25H2.vhdx`). A non-25H2 ISO (e.g. 24H2) is rejected. On
-   success the wizard shows **Build your first VM!** and closes itself.
+1. Click **SETUP** → the **Get Windows 11 Install Media** wizard opens.
+2. Click **DOWNLOAD & BUILD** and watch the live status: *Resolving media
+   from Microsoft… → Downloading… NN% (n / n MB) → Verifying download
+   (SHA256)… → Detected Windows 11 25H2 → Applying Windows image… NN% →
+   Writing UEFI… → Finalizing*.
+3. The VHDX is named for the release inside the image
+   (`C:\VMs\Win11-25H2.vhdx`). On success the wizard shows **Build your first
+   VM!** and closes itself.
+
+The wizard builds whichever release is selected under **WIN RELEASE** in the
+main window — its title and steps name that release, and its "already exists"
+warning is scoped to that release's parent only.
+
+Prefer to supply your own media — because you already have an ISO, or because
+your network blocks the download — click **USE EXISTING ISO** instead, pick
+the file, and the wizard skips straight to the apply. `.iso` is mounted;
+a `.esd`/`.wim` is applied directly. Media whose release doesn't match the
+selected one is rejected, so you can't accidentally build a 24H2 parent while
+25H2 is selected.
+
+From the CLI the same paths are:
+
+```powershell
+.\Get-Win11VHDX.ps1                          # download 25H2 + build
+.\Get-Win11VHDX.ps1 -Release 24H2            # download 24H2 + build
+.\Get-Win11VHDX.ps1 -PickIso                 # file picker, then build
+.\Get-Win11VHDX.ps1 -IsoPath D:\Win11.iso    # explicit media, then build
+```
+
+`-OSActivation Retail|Volume` (default `Retail`) and `-OSLanguage en-us`
+select which catalog entry to download.
+
+### Release support
+
+| Release | Build | Catalog SHA256 | Parent VHDX |
+| ------- | ----- | -------------- | ----------- |
+| 25H2 *(default)* | 26200 | ✅ published — download is hash-verified | `C:\VMs\Win11-25H2.vhdx` |
+| 24H2 | 26100 | ❌ not published — download **cannot** be hash-verified | `C:\VMs\Win11-24H2.vhdx` |
+
+Microsoft's Feature Update catalog currently carries a SHA256 for 25H2 but not
+for 24H2. When no hash is available the builder says so explicitly rather than
+letting silence imply a passed check.
+
+**This is worth understanding before picking 24H2.** The catalog hands out
+`http://dl.delivery.mp.microsoft.com/...` URLs — plain HTTP, and that host does
+not answer on HTTPS, so the URL cannot simply be upgraded. For 25H2 that's
+fine: the SHA256 is fetched over HTTPS from the catalog and checked against the
+downloaded bytes, so a tampered transfer is caught. For **24H2 there is no such
+check** — the builder verifies only that the byte count matches what the server
+promised, which catches a truncated download but nothing malicious.
+
+If that matters to you, prefer 25H2, or supply your own 24H2 media via
+**USE EXISTING ISO** / `-IsoPath`.
 
 If a parent VHDX already exists, SETUP warns before doing anything and names
 any VMs that depend on it (which must be removed via **CLEANUP VMs** before a
@@ -303,7 +362,7 @@ artifact in one shot:
 ```powershell
 .\Reset-VMPilot.ps1            # Inventory first, confirms before deleting
 .\Reset-VMPilot.ps1 -Force     # Skip confirmation
-.\Reset-VMPilot.ps1 -ResetISO  # Also nukes the cached Windows ISO (~5 GB)
+.\Reset-VMPilot.ps1 -ResetISO  # Also nukes the cached Windows media (~5 GB)
 ```
 
 It self-elevates, removes every VM not on its keep list, deletes their
@@ -403,14 +462,27 @@ edit it.
 
 ## Credits
 
-- **AutoPilot upload + assignment polling** — Andrew Taylor's community
-  fork of Get-WindowsAutopilotInfo:
-  https://github.com/andrew-s-taylor/WindowsAutopilotInfo
-- **VM provisioning** — `HyperV.VMFactory` by Sascha Stumpler:
-  https://github.com/SasStu/HyperV.VMFactory
+Full attribution and licensing for everything VM-Pilot leans on is in
+[LICENSE](LICENSE) under **Third-party components**. None of it is bundled
+here — each piece is installed from the PowerShell Gallery at runtime, direct
+from its publisher.
+
+- **AutoPilot upload + assignment polling** — Andrew Taylor's community fork
+  of `Get-WindowsAutopilotInfo`, itself forked from the original by **Michael
+  Niehaus**: https://github.com/andrew-s-taylor/WindowsAutopilotInfo
+  (**GPL-3.0**)
+- **VM provisioning** — [`HyperV.VMFactory`](https://github.com/SasStu/HyperV.VMFactory)
+  by **Sascha Stumpler** — creates the Gen-2 / Secure Boot / vTPM VM that
+  VM-Pilot boots from the parent VHDX. (**MIT**)
 - **Tenant record cleanup (Intune / Autopilot / Entra ID)** — `AutopilotCleanup`
-  by Mark Orr: https://github.com/markorr321/Autopilot-Cleanup
-- **ISO download resolver (CLI fallback)** — Pete Batard's Fido:
-  https://github.com/pbatard/Fido
+  by Mark Orr: https://github.com/markorr321/Autopilot-Cleanup (**MIT**)
+- **Windows media catalog + download URLs** — [`OSD`](https://github.com/OSDeploy/OSD)
+  by **David Segura** ([@OSDeploy](https://github.com/OSDeploy)) — the module
+  behind **OSDCloud**. VM-Pilot's entire "get Windows media" story is his work:
+  `Get-FeatureUpdate` resolves the official Microsoft download URL, filename and
+  SHA256 for a given release/channel/language, which is what let VM-Pilot drop
+  its old page-scraping resolver. Licensed **GPL-3.0**; installed from
+  PowerShell Gallery at runtime, never bundled or redistributed here.
+  Please star and support the project: https://github.com/OSDeploy/OSD
 - **Original CLI workflow that this replaced** —
   https://github.com/markorr321/HyperPilot-Offline-HWID-Collection-Workflow

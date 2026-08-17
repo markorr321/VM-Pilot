@@ -6,20 +6,24 @@
     Removes:
       - All Hyper-V VMs except a known "keep" list (your pre-existing VMs).
       - Their C:\VMs\<name>\ folders.
-      - The cached parent VHDX (C:\VMs\Win11-25H2.vhdx).
+      - Every cached parent VHDX (C:\VMs\Win11-*.vhdx -- one per release).
       - The cached community AutoPilot script (C:\Tools\VMPilot\...), left
         behind by VM-Pilot 0.5.0 and earlier. Current versions install the
         import GUI from PSGallery inside the VM and cache nothing on the host.
 
-    Optionally also removes the cached Windows ISO (forces a fresh ~5 GB download
-    on the next run -- omit -ResetISO unless you specifically want to test that path).
+    Optionally also removes the cached Windows install media (forces a fresh
+    ~5 GB download on the next run -- omit -ResetISO unless you specifically
+    want to test that path).
 
     Self-elevates to Administrator. Prompts for confirmation before destroying
     anything (skip with -Force).
 
 .PARAMETER ResetISO
-    Also delete C:\Tools\WinVHDX\Win11-25H2-Pro.iso so the next run re-downloads
-    the Windows 11 install media. Adds ~10-30 min depending on connection.
+    Also delete the cached Windows install media under C:\Tools\WinVHDX so the
+    next run re-downloads it. Adds ~10-30 min depending on connection. The
+    builder names its download after Microsoft's catalog entry (a long
+    .esd filename), so this matches on extension rather than a fixed name --
+    which also catches ISOs cached by older VM-Pilot versions.
 
 .PARAMETER Force
     Skip the interactive confirmation prompt. Useful for scripted CI.
@@ -46,6 +50,7 @@
 #>
 [CmdletBinding()]
 param(
+    [Alias('ResetMedia')]
     [switch]$ResetISO,
     [switch]$Force,
     [string[]]$Keep = @(
@@ -68,9 +73,15 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 $separator = '=' * 70
 
 # ----- Known paths -----
-$parentVhdx     = 'C:\VMs\Win11-25H2.vhdx'
+# One parent VHDX per Windows release (Win11-25H2.vhdx, Win11-24H2.vhdx, ...),
+# so glob rather than naming a single file.
+$parentVhdx     = @(Get-ChildItem -Path 'C:\VMs\Win11-*.vhdx' -File -ErrorAction SilentlyContinue)
 $communityCache = 'C:\Tools\VMPilot\Get-WindowsAutopilotInfoCommunity.ps1'
-$isoCache       = 'C:\Tools\WinVHDX\Win11-25H2-Pro.iso'
+$mediaDir       = 'C:\Tools\WinVHDX'
+# The builder's download is named by Microsoft's catalog (e.g.
+# 26200.8653.<...>_CLIENTCONSUMER_RET_x64FRE_en-us.esd), so glob by extension.
+# *.iso also sweeps up media cached by VM-Pilot's older Fido-based builder.
+$mediaCache     = @(Get-ChildItem -Path $mediaDir -File -Include '*.esd','*.iso' -Recurse -ErrorAction SilentlyContinue)
 
 # ----- Inventory -----
 Write-Host "`n$separator" -ForegroundColor Cyan
@@ -96,10 +107,13 @@ if ($kept.Count -eq 0) {
 
 Write-Host "`nFiles to delete:" -ForegroundColor Yellow
 $fileActions = @()
-if (Test-Path $parentVhdx)     { $fileActions += $parentVhdx;     Write-Host "  - $parentVhdx" }
+foreach ($v in $parentVhdx)    { $fileActions += $v.FullName;     Write-Host "  - $($v.FullName)" }
 if (Test-Path $communityCache) { $fileActions += $communityCache; Write-Host "  - $communityCache" }
-if ($ResetISO -and (Test-Path $isoCache)) {
-    $fileActions += $isoCache; Write-Host "  - $isoCache   (~5 GB)" -ForegroundColor Red
+if ($ResetISO) {
+    foreach ($m in $mediaCache) {
+        $fileActions += $m.FullName
+        Write-Host ("  - {0}   (~{1:N1} GB)" -f $m.FullName, ($m.Length / 1GB)) -ForegroundColor Red
+    }
 }
 if ($fileActions.Count -eq 0) { Write-Host '  (none)' -ForegroundColor DarkGray }
 
@@ -137,8 +151,10 @@ Write-Host "`nVMs remaining:" -ForegroundColor Green
 Get-VM | Sort-Object Name | Format-Table Name, State, Uptime -AutoSize
 
 Write-Host 'Cache file presence:' -ForegroundColor Green
-"  parent VHDX  : $(Test-Path $parentVhdx)"
+$vhdxLeft = @(Get-ChildItem -Path 'C:\VMs\Win11-*.vhdx' -File -ErrorAction SilentlyContinue)
+"  parent VHDX  : $(if ($vhdxLeft.Count) { ($vhdxLeft.Name -join ', ') } else { 'False' })"
 "  community PS : $(Test-Path $communityCache)"
-"  Windows ISO  : $(Test-Path $isoCache)"
+$remaining = @(Get-ChildItem -Path $mediaDir -File -Include '*.esd','*.iso' -Recurse -ErrorAction SilentlyContinue)
+"  Windows media: $(if ($remaining.Count) { "$($remaining.Count) file(s) in $mediaDir" } else { 'False' })"
 
 Write-Host "`nReady for a clean VM-Pilot run." -ForegroundColor Green

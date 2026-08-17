@@ -20,8 +20,10 @@
 
     # ----- Required modules -----
     # HyperV.VMFactory is auto-installed by the GUI on first run if missing,
-    # so it's intentionally NOT listed as RequiredModules (that would force
-    # the dependency at Import-Module time even for users who never run a VM).
+    # and OSD is auto-installed by Get-Win11VHDX.ps1 the first time it has to
+    # download install media. Both are intentionally NOT listed as
+    # RequiredModules -- that would force the dependency at Import-Module time
+    # even for users who never run a VM or who supply their own ISO.
 
     # ----- Files shipped with the module -----
     FileList = @(
