@@ -1,7 +1,7 @@
 ﻿@{
     # ----- Identity -----
     RootModule        = 'VM-Pilot.psm1'
-    ModuleVersion     = '0.7.0'
+    ModuleVersion     = '0.7.1'
     GUID              = '5a7b4c3d-9e1f-4a2b-8c5d-1e2f3a4b5c6d'
     Author            = 'Mark Orr'
     CompanyName       = 'Mark Orr'
@@ -45,6 +45,20 @@
             LicenseUri   = 'https://github.com/markorr321/VM-Pilot/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/markorr321/VM-Pilot'
             ReleaseNotes = @'
+0.7.1
+- Fix "Build failed: The handle is invalid." on hosts where the BITS service
+  is broken or disabled. Start-BitsTransfer now runs inside the try block, so
+  any BITS failure (E_HANDLE, service error, failed transfer) falls back to a
+  direct download instead of ending the build. Previously the fallback only
+  fired when Import-Module BitsTransfer itself failed, which almost never
+  happens - so a BITS problem was fatal.
+- That fallback is now a streaming HttpClient download that emits the same
+  "Download progress: X% (X / X MB)" lines BITS does, so the wizard's progress
+  bar keeps working on that path instead of sitting frozen.
+- Fix 0x80070006 (E_HANDLE) from Get-Disk during VHDX creation on busy hosts.
+  Mount-VHD and Get-Disk are no longer pipelined; a short pause between them
+  gives VDS time to publish the disk handle to WMI before it is queried.
+
 0.7.0
 - Windows install media is now downloaded for you. VM-Pilot resolves it through
   David Segura's OSD module - the module behind OSDCloud - whose
@@ -172,29 +186,7 @@
   a pwsh window that signs in to Microsoft Graph (Intune admin required). The
   checkbox is disabled with a note if pwsh 7 is not installed.
 
-0.4.2
-- Fix VHDX apply progress bar stuck at 0%. The previous approach read
-  ImageSize from Get-WindowsImage to calculate a denominator for volume-
-  usage polling, but ImageSize returns 0 for ESD files (all modern Windows
-  11 ISOs), so the GUI bar never moved. Replaced Expand-WindowsImage and
-  the DispatcherTimer volume-poller with a direct dism.exe /Apply-Image
-  call that streams its own CR-delimited progress output. The builder now
-  emits real 0-100% progress lines that the GUI pipeline consumes directly,
-  with no dependency on image metadata or disk polling.
-
-0.4.0
-- 25H2 only. Dropped 24H2 as a selectable Windows 11 release. The WIN
-  RELEASE segment is fixed at 25H2, the -Release parameter on the builder
-  accepts only 25H2, and Get-Win11VHDX.ps1 rejects a 24H2 (build 26100)
-  ISO instead of building a VHDX the GUI would never load.
-- Removed the UUP Dump download path and the bundled Get-UUPDumpISO.ps1
-  helper. When no cached parent VHDX exists, the GUI now sends you straight
-  to the "Get Windows 11 Install Media" wizard: download the official ISO
-  from https://www.microsoft.com/en-us/software-download/windows11, then
-  build the parent VHDX from it. Once the wizard finishes, the pending VM
-  build continues automatically.
-
-Older releases (0.3.x and earlier) are listed at
+Older releases (0.4.x and earlier) are listed at
 https://github.com/markorr321/VM-Pilot/releases
 '@
         }
