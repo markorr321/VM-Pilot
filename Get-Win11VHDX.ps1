@@ -196,8 +196,9 @@ if ($IsoPath) {
         $totalBytes = 0
 
         if ($useBits) {
-            $bitsJob = Start-BitsTransfer -Source $fu.Url -Destination $media -DisplayName 'VMPilot-Win11Media' -Asynchronous
+            $bitsJob = $null
             try {
+                $bitsJob = Start-BitsTransfer -Source $fu.Url -Destination $media -DisplayName 'VMPilot-Win11Media' -Asynchronous
                 # BITS reports BytesTotal as BG_SIZE_UNKNOWN ([uint64]::MaxValue,
                 # 18446744073709551615) until the server's headers arrive -- which
                 # is exactly what the first poll sees while the job is still
@@ -229,14 +230,60 @@ if ($IsoPath) {
                     throw "BITS transfer ended in state '$($bitsJob.JobState)': $errDesc"
                 }
             } catch {
+                # BITS failed (E_HANDLE, service error, transfer failure). Clean up
+                # the job and fall through to Invoke-WebRequest below.
                 if ($bitsJob) {
                     Get-BitsTransfer -JobId $bitsJob.JobId -ErrorAction SilentlyContinue |
                         Remove-BitsTransfer -ErrorAction SilentlyContinue
                 }
-                throw
+                Write-Warning "BITS transfer failed ($($_.Exception.Message)) — falling back to Invoke-WebRequest."
+                $useBits = $false
             }
-        } else {
-            Invoke-WebRequest -Uri $fu.Url -OutFile $media
+        }
+        if (-not $useBits) {
+            $client   = [System.Net.Http.HttpClient]::new()
+            $client.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
+            $response = $null
+            try {
+                $response = $client.GetAsync($fu.Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                $response.EnsureSuccessStatusCode() | Out-Null
+                $contentLength = $response.Content.Headers.ContentLength
+                if ($contentLength) { $totalBytes = [uint64]$contentLength }
+                $responseStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                $fs  = [System.IO.FileStream]::new($media, [System.IO.FileMode]::Create,
+                           [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 1MB)
+                $buf = [byte[]]::new(1MB)
+                $downloaded = [uint64]0
+                $lastPct = -1
+                $lastMB  = 0
+                try {
+                    while (($read = $responseStream.Read($buf, 0, $buf.Length)) -gt 0) {
+                        $fs.Write($buf, 0, $read)
+                        $downloaded += [uint64]$read
+                        if ($totalBytes -gt 0) {
+                            $pct = [int](($downloaded / $totalBytes) * 100)
+                            if ($pct -ne $lastPct) {
+                                $cur = [int64]($downloaded / 1MB)
+                                $tot = [int64]($totalBytes / 1MB)
+                                Write-Host "Download progress: $pct% ($cur / $tot MB)"
+                                $lastPct = $pct
+                            }
+                        } else {
+                            $curMB = [int64]($downloaded / 1MB)
+                            if ($curMB -ge $lastMB + 100) {
+                                Write-Host "Download progress: unknown ($curMB MB so far)"
+                                $lastMB = $curMB
+                            }
+                        }
+                    }
+                } finally {
+                    $fs.Close()
+                    $responseStream.Close()
+                }
+            } finally {
+                if ($response) { $response.Dispose() }
+                $client.Dispose()
+            }
         }
 
         # Completeness check: did we get every byte the server promised? This
@@ -413,7 +460,14 @@ $vhd  = New-VHD -Path $OutVhdx -SizeBytes ($SizeGB * 1GB) -Dynamic
 # Windows's shell can pop "format disk in drive X:" while we're partitioning
 # if it tries to auto-letter a partition mid-format. Restored at script end.
 & mountvol /N | Out-Null
-$disk = Mount-VHD -Path $OutVhdx -Passthru | Get-Disk
+$vhd  = Mount-VHD -Path $OutVhdx -Passthru
+# VDS needs a moment after Mount-VHD before the disk handle is published to
+# WMI. Sleep here — between Mount-VHD and Get-Disk — so the pause happens
+# before the first WMI call, not after. The pipelined form
+# (Mount-VHD | Get-Disk) throws 0x80070006 (E_HANDLE) if VDS hasn't settled
+# yet, which makes any post-pipeline sleep useless.
+Start-Sleep -Seconds 2
+$disk = Get-Disk -Number $vhd.DiskNumber
 Initialize-Disk -Number $disk.Number -PartitionStyle GPT
 
 # Assign the drive letter FIRST, then format by letter. Format-Volume
