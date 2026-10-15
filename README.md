@@ -224,7 +224,9 @@ Explorer with the file selected. Errors render in red in the same slot.
   ~10-30 min for the media download (live percentage) plus ~5-10 min for the
   apply. When it finishes, the VM build continues automatically. Each
   release's parent VHDX is built once and cached, and the downloaded media is
-  kept under `C:\Tools\WinVHDX` so a rebuild never re-downloads.
+  kept under `C:\Tools\WinVHDX` so a rebuild normally reuses it instead of
+  downloading again — see [Media caching](#media-caching) for the one case
+  where it doesn't.
 - **First Online run** — the host downloads nothing extra; the import GUI is
   installed from the PowerShell Gallery *inside the VM* the first time you run
   `C:\import.bat`.
@@ -294,6 +296,33 @@ If a parent VHDX already exists, SETUP warns before doing anything and names
 any VMs that depend on it (which must be removed via **CLEANUP VMs** before a
 rebuild can replace the parent).
 
+### Media caching
+
+Downloaded media is cached under `C:\Tools\WinVHDX` and reused on a rebuild,
+so the ~4-6 GB download is normally a one-time cost per release. The cache is
+keyed on **the exact filename Microsoft's catalog hands back** for that
+release, not on the release name:
+
+- **Cache hit** — the file is there and (for 25H2) still matches the catalog's
+  SHA256: *"Reusing cached media"*, and the build goes straight to the apply.
+- **Cache hit, bad hash** — the cached file fails its SHA256 check. It's
+  deleted and re-downloaded rather than handed to DISM as a corrupt image.
+- **Cache miss** — **Microsoft published a newer build of the same release.**
+  The catalog now names a different `.esd` (for example `26200.8653` →
+  `26200.9457`, both 25H2), so the cached file doesn't match and the new one
+  downloads in full.
+
+That last case is worth knowing about: *"I already built 25H2, why is it
+downloading 6 GB again?"* is the catalog moving forward, not a bug. The
+resulting parent is simply built from newer media.
+
+**Superseded media is not cleaned up.** Each catalog bump leaves the previous
+`.esd` behind, so `C:\Tools\WinVHDX` grows by ~5-6 GB per bump. Clear it with
+`.\Reset-VMPilot.ps1 -ResetISO`, which matches on extension and removes every
+cached `.esd`, not just the current one. A superseded `.esd` is still valid
+media, so it's also a useful fallback via **USE EXISTING ISO** if a fresh
+download fails — it just builds the older patch level of that release.
+
 ## In-VM enrollment GUI (Online only)
 
 Once the VM is booted and at OOBE region screen:
@@ -362,13 +391,19 @@ artifact in one shot:
 ```powershell
 .\Reset-VMPilot.ps1            # Inventory first, confirms before deleting
 .\Reset-VMPilot.ps1 -Force     # Skip confirmation
-.\Reset-VMPilot.ps1 -ResetISO  # Also nukes the cached Windows media (~5 GB)
+.\Reset-VMPilot.ps1 -ResetISO  # Also nukes every cached .esd (~5-6 GB each)
 ```
 
 It self-elevates, removes every VM not on its keep list, deletes their
 `C:\VMs\<name>\` folders, removes the cached parent VHDX, and removes the
 cached community AutoPilot script. Override the keep list with
 `-Keep @('VM1','VM2',...)`.
+
+`-ResetISO` matches on the `.esd` extension rather than a fixed name, so it
+clears **every** cached image — including copies superseded by a catalog bump
+(see [Media caching](#media-caching)). On a host that's been through a few
+releases that can be well over 5 GB. Omit it unless you specifically want to
+exercise the download path, since the next run re-downloads from scratch.
 
 ## Theme
 
@@ -453,6 +488,18 @@ edit it.
   `-Assign` flag in the community script invocation. The community script
   needs all three: `-Online -Assign -Reboot`. VM-Pilot ships this combo by
   default; if you've forked the in-VM GUI, double-check.
+- **Build fails with "The handle is invalid"** — fixed in 0.7.1. Media is
+  downloaded with **BITS** (which is what feeds the live percentage on the
+  progress bar); a broken or disabled BITS service used to surface as
+  `0x80070006 E_HANDLE` and kill the build. The builder now catches any BITS
+  failure, warns, and falls back to a streaming `HttpClient` download that
+  reports progress the same way, so the build completes either way. The same
+  error code could also come from `Mount-VHD` racing VDS during the apply,
+  which the builder now waits out. On an older version, upgrade with
+  `Update-Module VM-Pilot`.
+- **Build re-downloads media you've already got** — expected when Microsoft
+  publishes a newer build of that release; see
+  [Media caching](#media-caching).
 - **Rebuild blocked / cached VHDX is locked** — a test VM is still using
   the parent as its differencing disk. The builder now refuses to delete a
   parent any VM depends on (and names the VM in the error) rather than

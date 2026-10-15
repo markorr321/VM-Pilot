@@ -12,8 +12,9 @@
         import GUI from PSGallery inside the VM and cache nothing on the host.
 
     Optionally also removes the cached Windows install media (forces a fresh
-    ~5 GB download on the next run -- omit -ResetISO unless you specifically
-    want to test that path).
+    ~4-6 GB download on the next run -- omit -ResetISO unless you specifically
+    want to test that path). Note this clears every cached .esd, including
+    copies superseded by a catalog bump, so it can free well over 5 GB.
 
     Self-elevates to Administrator. Prompts for confirmation before destroying
     anything (skip with -Force).
